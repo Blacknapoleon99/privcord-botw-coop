@@ -1,0 +1,1475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="How PrivCord got Breath of the Wild multiplayer working between two PCs: architecture, real-time sync, the long bug, the original mod vs PrivCord, hindsight and what is next.">
+<title>BotW Multiplayer Whiteboard</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Kalam:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+body { margin: 0; }
+[hidden] { display: none !important; }
+
+/* Layout: one long whiteboard in an aluminium frame; each section is a "panel" drawn on it in dry-erase marker colours.
+   Single deliberate look (a whiteboard is white), so no dark palette. */
+:root {
+  color-scheme: light;
+  --board: #f9faf8;
+  --grid: #e7ebe6;
+  --frame: #b9bec4;
+  --ink: #1d2129;        /* black marker */
+  --ink-soft: #4a515c;
+  --blue: #1d4fc4;       /* PrivCord (ours) */
+  --purple: #7a3fb0;     /* BOTWM mod (theirs) */
+  --green: #1b8a4a;      /* Cemu / the game / worked */
+  --red: #d2362a;        /* bugs / didn't work */
+  --orange: #d9770a;     /* external tools */
+  --sticky: #fff3a6;
+  --sticky-edge: #e9d76a;
+  --sticky-pink: #ffd9e2;
+  --sticky-blue: #d7ecff;
+  --sticky-green: #dcf5df;
+  --code-bg: #f1f3f6;
+  --hand: "Kalam", "Comic Sans MS", "Segoe Print", cursive;
+  --marker: "Permanent Marker", "Kalam", "Segoe Print", cursive;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  background: #d6dade;
+  color: var(--ink);
+  font-family: var(--hand);
+  font-size: 18px;
+  line-height: 1.45;
+}
+.frame {
+  max-width: 1280px;
+  margin: 18px auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.board {
+  background-color: var(--board);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 32px 32px;
+  border: 14px solid var(--frame);
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 2px #fff, 0 10px 30px rgba(30, 40, 50, .25);
+  padding-block: 28px 48px;
+  padding-inline: clamp(14px, 3vw, 44px);
+}
+h1, h2, h3 { font-family: var(--marker); font-weight: 400; text-wrap: balance; margin: 0; letter-spacing: .3px; }
+h1 { font-size: clamp(34px, 6vw, 64px); line-height: 1.05; color: var(--blue); }
+h2 { font-size: clamp(26px, 3.6vw, 38px); color: var(--ink); }
+h2 .u { background: linear-gradient(transparent 62%, rgba(255, 213, 74, .7) 62%); padding: 0 4px; }
+h3 { font-size: 22px; }
+p { margin: 0; }
+code, .mono { font-family: var(--mono); font-size: .78em; }
+:focus-visible { outline: 3px dashed var(--blue); outline-offset: 3px; }
+
+.top { display: grid; gap: 14px; }
+.kicker { font-family: var(--mono); font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--ink-soft); }
+.lede { max-width: 70ch; font-size: 20px; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 18px; font-size: 16px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 26px; height: 6px; border-radius: 3px; display: inline-block; }
+
+nav.toc {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  margin-block: 22px 8px;
+  display: flex; flex-wrap: wrap; gap: 6px;
+  background: rgba(249, 250, 248, .94);
+  padding: 8px 4px;
+  border-bottom: 2px dashed var(--grid);
+}
+nav.toc a {
+  font-family: var(--hand); font-weight: 700; font-size: 15px; color: var(--ink);
+  text-decoration: none; padding: 3px 10px; border: 2px solid var(--ink); border-radius: 14px 10px 16px 9px;
+  background: #fff;
+}
+nav.toc a:hover { background: var(--sticky); }
+
+section { margin-top: 56px; display: grid; gap: 18px; scroll-margin-top: 70px; }
+.sub { color: var(--ink-soft); max-width: 75ch; }
+
+/* number strip */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-top: 8px; }
+.stat { border: 2.5px solid var(--ink); border-radius: 12px 8px 14px 9px; padding: 10px 12px; background: #fff; }
+.stat b { display: block; font-family: var(--marker); font-weight: 400; font-size: 30px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 15px; color: var(--ink-soft); }
+.stat.r b { color: var(--red); } .stat.g b { color: var(--green); } .stat.b b { color: var(--blue); } .stat.p b { color: var(--purple); }
+
+/* diagrams */
+.scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.scroll > svg { display: block; min-width: 940px; width: 100%; height: auto; }
+.diagram-note { font-size: 15px; color: var(--ink-soft); }
+svg text { font-family: var(--hand); fill: var(--ink); }
+svg .mk { font-family: var(--marker); }
+svg .mono { font-family: var(--mono); font-size: 12.5px; }
+
+@keyframes flow { to { stroke-dashoffset: -40; } }
+.flowline { stroke-dasharray: 10 10; animation: flow 1.2s linear infinite; }
+@keyframes pkt { 0% { transform: translateX(0); opacity: 0 } 10% { opacity: 1 } 90% { opacity: 1 } 100% { transform: translateX(118px); opacity: 0 } }
+.pkt { animation: pkt 2.4s linear infinite; }
+.pkt.d2 { animation-delay: .8s; } .pkt.d3 { animation-delay: 1.6s; }
+
+/* long bug simulator */
+.bugsim { border: 3px solid var(--red); border-radius: 16px 10px 18px 12px; padding: 18px; background: #fff; display: grid; gap: 14px; }
+.toggle { display: flex; flex-wrap: wrap; gap: 8px; }
+.toggle button {
+  font-family: var(--hand); font-weight: 700; font-size: 16px; cursor: pointer;
+  border: 2.5px solid var(--ink); background: #fff; color: var(--ink); padding: 6px 14px; border-radius: 12px 8px 14px 9px;
+}
+.toggle button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+.lane { display: grid; grid-template-columns: 150px 1fr; gap: 10px; align-items: center; }
+.lane > b { font-size: 15px; }
+.bytes { display: flex; gap: 4px; height: 38px; min-width: 0; }
+.chunk { border: 2px solid var(--ink); border-radius: 6px; display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 12px; white-space: nowrap; overflow: hidden; background: var(--sticky-blue); transition: flex .5s ease, background .3s; }
+.chunk.bad { background: var(--sticky-pink); border-color: var(--red); color: var(--red); }
+.chunk.good { background: var(--sticky-green); border-color: var(--green); color: var(--green); }
+.verdict { font-size: 19px; padding: 10px 14px; border-left: 6px solid var(--red); background: var(--sticky-pink); border-radius: 4px; }
+.verdict.ok { border-left-color: var(--green); background: var(--sticky-green); }
+.chain { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 16px; }
+.chain .n { border: 2px solid var(--ink); border-radius: 10px 7px 12px 8px; padding: 2px 9px; background: #fff; }
+.chain .n.r { border-color: var(--red); color: var(--red); }
+.chain .arr { color: var(--ink-soft); font-weight: 700; }
+
+/* timeline */
+.timeline { display: grid; gap: 0; position: relative; padding-left: 34px; }
+.timeline::before { content: ""; position: absolute; left: 12px; top: 6px; bottom: 6px; width: 4px; background: var(--ink); border-radius: 2px; }
+.tl { position: relative; padding: 0 0 22px 0; display: grid; gap: 4px; }
+.tl::before { content: ""; position: absolute; left: -29px; top: 7px; width: 14px; height: 14px; border-radius: 50%; background: var(--board); border: 3.5px solid var(--ink); }
+.tl.win::before { background: var(--green); border-color: var(--green); }
+.tl.wall::before { background: var(--red); border-color: var(--red); }
+.tl h3 { font-size: 21px; }
+.tl .when { font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft); letter-spacing: .5px; }
+.tl ul { margin: 2px 0 0; padding-left: 20px; }
+.tl li { margin: 1px 0; }
+
+/* sticky notes */
+.notes { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }
+.note {
+  background: var(--sticky); border: 1px solid var(--sticky-edge);
+  padding: 14px 16px 16px; box-shadow: 2px 5px 0 rgba(0, 0, 0, .08); display: grid; gap: 7px; align-content: start;
+  min-width: 0;
+}
+.note:nth-child(4n+1) { transform: rotate(-.7deg); } .note:nth-child(4n+2) { transform: rotate(.6deg); }
+.note:nth-child(4n+3) { transform: rotate(-.3deg); } .note:nth-child(4n) { transform: rotate(.9deg); }
+.note.big { background: var(--sticky-pink); border-color: #f0aebf; }
+.note h3 { font-size: 19px; color: var(--red); }
+.note .lbl { font-family: var(--mono); font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--ink-soft); margin-top: 2px; }
+.note p { font-size: 16.5px; }
+.note .fix { color: var(--green); font-weight: 700; }
+
+/* code pairs */
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.pair-wrap { display: grid; gap: 8px; padding: 16px; border: 2.5px dashed var(--ink-soft); border-radius: 14px; background: rgba(255, 255, 255, .7); }
+.pair-wrap > h3 { font-size: 22px; }
+.pair-wrap > p { font-size: 16.5px; color: var(--ink-soft); }
+.snip { min-width: 0; display: grid; gap: 6px; align-content: start; }
+.snip .tag { font-family: var(--marker); font-size: 18px; }
+.snip.no .tag { color: var(--red); } .snip.yes .tag { color: var(--green); }
+pre {
+  margin: 0; overflow-x: auto; background: var(--code-bg); border-radius: 8px; padding: 12px 14px;
+  font-family: var(--mono); font-size: 13px; line-height: 1.55; color: var(--ink);
+  border: 2px solid var(--ink);
+}
+.snip.no pre { border-color: var(--red); background: #fdf1ef; }
+.snip.yes pre { border-color: var(--green); background: #eff9f1; }
+pre .c { color: #6c737d; font-style: italic; }
+pre .k { color: var(--purple); font-weight: 600; }
+pre .s { color: #b45309; }
+pre .x { background: rgba(210, 54, 42, .18); }
+pre .ok { background: rgba(27, 138, 74, .18); }
+.src { font-family: var(--mono); font-size: 11.5px; color: var(--ink-soft); }
+
+/* removed list */
+.cut { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px 26px; }
+.cut div { display: grid; gap: 2px; padding: 6px 0; border-bottom: 2px dotted var(--frame); min-width: 0; }
+.cut s { text-decoration-color: var(--red); text-decoration-thickness: 3px; font-weight: 700; font-size: 18px; }
+.cut span { font-size: 16px; color: var(--ink-soft); }
+
+/* tools */
+.tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.tool { border: 2.5px solid var(--orange); border-radius: 14px 9px 15px 10px; padding: 10px 12px; background: #fff; display: grid; gap: 3px; min-width: 0; }
+.tool b { font-size: 17.5px; }
+.tool span { font-size: 15px; color: var(--ink-soft); }
+.tool .role { font-family: var(--mono); font-size: 10.5px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--orange); }
+
+/* tables */
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 16px; background: #fff; }
+th, td { border: 2px solid var(--ink); padding: 7px 10px; text-align: left; vertical-align: top; }
+th { font-family: var(--marker); font-weight: 400; font-size: 17px; background: var(--sticky-blue); }
+td.num { font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 13.5px; }
+.pill { display: inline-block; font-family: var(--mono); font-size: 11.5px; padding: 1px 8px; border-radius: 10px; border: 1.5px solid; white-space: nowrap; }
+.pill.g { color: var(--green); border-color: var(--green); background: var(--sticky-green); }
+.pill.y { color: #8a6100; border-color: #c99a1a; background: var(--sticky); }
+.pill.r { color: var(--red); border-color: var(--red); background: var(--sticky-pink); }
+
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.box { border: 2.5px solid var(--ink); border-radius: 14px 9px 16px 10px; padding: 14px 16px; background: #fff; display: grid; gap: 8px; min-width: 0; }
+.box ul { margin: 0; padding-left: 20px; }
+.tray { height: 16px; margin: 0 30px; background: linear-gradient(#c9ced3, #a9afb6); border-radius: 0 0 10px 10px; position: relative; }
+.tray::before, .tray::after { content: ""; position: absolute; top: -4px; height: 10px; width: 90px; border-radius: 5px; }
+.tray::before { left: 18%; background: var(--blue); } .tray::after { left: 26%; width: 70px; background: var(--red); }
+footer { margin-top: 48px; font-size: 15px; color: var(--ink-soft); display: grid; gap: 4px; }
+
+/* animated demos */
+.demo { border: 2.5px solid var(--ink); border-radius: 14px 9px 16px 10px; padding: 14px 16px; background: #fff; display: grid; gap: 10px; min-width: 0; align-content: start; }
+.arrivals-row { display: grid; grid-template-columns: 190px 1fr; gap: 12px; align-items: center; }
+.arrivals-row > b { font-size: 16px; }
+.arrivals { position: relative; height: 34px; border-bottom: 2px dashed var(--ink-soft); }
+.arrivals i { position: absolute; bottom: 4px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: var(--purple); animation: blink 5s linear infinite; }
+.arrivals .gap { position: absolute; top: 0; font-size: 12px; color: var(--red); text-align: center; border-top: 2px solid var(--red); padding-top: 1px; white-space: nowrap; }
+@keyframes blink { 0%, 100% { opacity: .35 } 50% { opacity: 1 } }
+.track { position: relative; height: 52px; border-bottom: 3px solid var(--ink-soft); background: repeating-linear-gradient(90deg, transparent 0 39px, var(--grid) 39px 40px); }
+.track .who { position: absolute; bottom: 2px; left: 0; width: 34px; height: 44px; }
+.track .who svg { width: 34px; height: 44px; }
+.raw .who { animation: rawmove 5s linear infinite; }
+.smooth .who { animation: smoothmove 5s linear infinite; }
+@keyframes rawmove {
+  0% { left: 0% } 6% { left: 5% } 14% { left: 5% } 15% { left: 13% } 19% { left: 17% } 23% { left: 20% }
+  34% { left: 20% } 35.5% { left: 31% } 39% { left: 35% } 43% { left: 39% } 54% { left: 39% } 55% { left: 50% }
+  59% { left: 54% } 63% { left: 58% } 74% { left: 58% } 75.5% { left: 69% } 79% { left: 73% } 83% { left: 77% } 94% { left: 77% } 95% { left: 85% } 100% { left: 88% }
+}
+@keyframes smoothmove { from { left: 0% } to { left: 88% } }
+
+.stage { position: relative; height: 170px; border: 2px dashed var(--ink-soft); border-radius: 10px; overflow: hidden;
+  background: linear-gradient(transparent 72%, var(--sticky-green) 72%); }
+.stage-label { position: absolute; left: 8px; right: 8px; bottom: 6px; font-size: 13.5px; color: var(--ink-soft); }
+.ghost, .stayer { position: absolute; display: grid; justify-items: center; font-size: 13px; font-weight: 700; }
+.ghost { left: calc(50% - 30px); top: 30px; color: var(--purple); animation: ghost 3s ease-in infinite; }
+@keyframes ghost {
+  0% { opacity: 0; transform: translateY(0) } 12% { opacity: .9 } 30% { opacity: .9; transform: translateY(0) translateX(0) }
+  34% { transform: translateX(-3px) } 38% { transform: translateX(3px) }
+  60% { opacity: 0; transform: translateY(90px) } 100% { opacity: 0; transform: translateY(90px) }
+}
+.stayer { top: 54px; left: 12%; color: var(--green); animation: patrol 4s ease-in-out infinite alternate; }
+@keyframes patrol { from { left: 10% } to { left: 72% } }
+
+.race { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; }
+.steps { margin: 0; padding-left: 26px; display: grid; gap: 3px; font-size: 16.5px; }
+.steps li { transition: color .3s, opacity .3s; opacity: .45; }
+.steps li.done { opacity: 1; }
+.steps li.done::marker { color: var(--green); }
+.steps li.done::after { content: " ✓"; color: var(--green); font-weight: 700; }
+#steps-new li { font-size: 18px; }
+.playing { font-family: var(--marker); font-size: 24px; color: var(--green); opacity: 0; transform: scale(.9); transition: opacity .4s, transform .4s; }
+.playing.on { opacity: 1; transform: scale(1); }
+
+.ledger { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.ledger .col { border: 2.5px solid; border-radius: 12px 8px 14px 9px; padding: 12px 14px; background: #fff; min-width: 0; }
+.ledger h4 { margin: 0 0 6px; font-family: var(--marker); font-weight: 400; font-size: 19px; }
+.ledger h4 small { display: block; font-family: var(--hand); font-size: 14px; color: var(--ink-soft); }
+.ledger ul { margin: 0; padding-left: 18px; font-size: 15.5px; display: grid; gap: 4px; }
+.ledger .theirs { border-color: var(--purple); } .ledger .theirs h4 { color: var(--purple); }
+.ledger .versions { border-color: var(--orange); } .ledger .versions h4 { color: var(--orange); }
+.ledger .ours { border-color: var(--blue); } .ledger .ours h4 { color: var(--blue); }
+.ledger .env { border-color: var(--green); } .ledger .env h4 { color: var(--green); }
+
+.hind { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 16px; }
+.hind .h { background: var(--sticky-blue); border: 1px solid #a9cdf0; padding: 14px 16px; display: grid; gap: 6px; align-content: start; box-shadow: 2px 5px 0 rgba(0,0,0,.07); min-width: 0; }
+.hind .h:nth-child(odd) { transform: rotate(-.5deg); } .hind .h:nth-child(even) { transform: rotate(.5deg); }
+.hind .h:last-child { background: var(--sticky-green); border-color: #9fd8a8; }
+.hind .cost { font-family: var(--mono); font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--red); }
+.hind .h:last-child .cost { color: var(--green); }
+.hind h3 { font-size: 19px; }
+.hind p { font-size: 16px; }
+
+.revive .rv-row { display: grid; gap: 8px; max-width: 520px; margin: 0 auto; width: 100%; padding: 12px; border-radius: 10px; background: #1d2129; color: #fff; }
+.rv-who { position: relative; height: 26px; }
+.rv-state { position: absolute; left: 0; top: 0; font-size: 18px; font-weight: 700; }
+.rv-state .hearts { color: #ff6b6b; }
+.rv-state.down { animation: rvdown 7s infinite; }
+.rv-state.up { opacity: 0; color: #8ff0a8; animation: rvup 7s infinite; }
+@keyframes rvdown { 0%, 80% { opacity: 1 } 84%, 100% { opacity: 0 } }
+@keyframes rvup { 0%, 80% { opacity: 0 } 84%, 100% { opacity: 1 } }
+.rv-prompt { font-size: 16px; } .rv-prompt small { color: #b9c0ca; }
+.rv-prompt kbd { font-family: var(--mono); font-size: 13px; border: 2px solid #fff; border-radius: 5px; padding: 0 6px; margin-right: 4px; }
+.rv-bar { height: 14px; border-radius: 7px; background: #3a414c; overflow: hidden; }
+.rv-bar span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #5fd17f, #9bf0b2); animation: rvfill 7s linear infinite; }
+@keyframes rvfill { 0% { width: 0 } 80% { width: 100% } 100% { width: 100% } }
+
+.road { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.lane-col { display: grid; gap: 10px; align-content: start; padding: 12px; border-radius: 14px; border: 2.5px dashed; min-width: 0; }
+.lane-col h3 { font-size: 24px; } .lane-col h3 small { font-family: var(--hand); font-size: 15px; color: var(--ink-soft); }
+.lane-col.now { border-color: var(--green); } .lane-col.now h3 { color: var(--green); }
+.lane-col.next { border-color: var(--blue); } .lane-col.next h3 { color: var(--blue); }
+.lane-col.later { border-color: var(--purple); } .lane-col.later h3 { color: var(--purple); }
+.card { background: #fff; border: 2px solid var(--ink); border-radius: 10px 7px 12px 8px; padding: 8px 11px; display: grid; gap: 2px; }
+.card b { font-size: 17px; } .card span { font-size: 15px; color: var(--ink-soft); }
+
+@media (max-width: 900px) { .road, .race { grid-template-columns: 1fr; } }
+@media (max-width: 760px) {
+  .arrivals-row { grid-template-columns: 1fr; gap: 4px; }
+  .pair, .two { grid-template-columns: 1fr; }
+  .lane { grid-template-columns: 1fr; gap: 4px; }
+  body { font-size: 17px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flowline, .pkt, .arrivals i, .raw .who, .smooth .who, .ghost, .stayer, .rv-state, .rv-bar span { animation: none; }
+  .smooth .who, .raw .who { left: 44%; }
+  .ghost { opacity: .6; }
+  .rv-state.up { display: none; } .rv-bar span { width: 60%; }
+  .chunk { transition: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="frame">
+<div class="board">
+
+<header class="top">
+  <div class="kicker">PrivCord × Breath of the Wild · Oct 18–20, 2026 · two PCs, one Hyrule</div>
+  <h1>How we got two Links into one world</h1>
+  <p class="lede">The whole build on one board: how PrivCord installs and runs the BOTW Multiplayer mod, the bug that ate three sessions, how both players finally see each other move in real time, and everything we tried, cut and added along the way.</p>
+  <div class="legend" aria-label="Marker colour legend">
+    <span><i style="background:var(--blue)"></i>PrivCord (our code)</span>
+    <span><i style="background:var(--purple)"></i>BOTWM 1.0.4 mod (theirs, untouched)</span>
+    <span><i style="background:var(--green)"></i>Cemu / the game / worked</span>
+    <span><i style="background:var(--red)"></i>bug / didn't work</span>
+    <span><i style="background:var(--orange)"></i>external tools</span>
+  </div>
+  <div class="stats">
+    <div class="stat b"><b>31.9 GB</b><span>game bundle tar, 59,983 files, one-click install</span></div>
+    <div class="stat p"><b>7,168 B</b><span>size of every client → server message</span></div>
+    <div class="stat r"><b>0 / 227,150</b><span>server replies that had <code>Updated = 1</code> before the fix</span></div>
+    <div class="stat r"><b>46 / 44</b><span>puppets spawned / erased on STRIX (ghost Links)</span></div>
+    <div class="stat r"><b>~250 ms</b><span>until each puppet snapped to (0,0,0)</span></div>
+    <div class="stat g"><b>14% → 0%</b><span>frozen frames on the other player after smoothing</span></div>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#arch">Architecture</a>
+  <a href="#realtime">Real-time sync</a>
+  <a href="#longbug">The long bug</a>
+  <a href="#versus">vs the original mod</a>
+  <a href="#timeline">Timeline</a>
+  <a href="#stuck">Stuck → unstuck</a>
+  <a href="#code">Code: ✗ vs ✓</a>
+  <a href="#cut">What we cut</a>
+  <a href="#hindsight">Hindsight</a>
+  <a href="#tools">Toolbox</a>
+  <a href="#coop">Co-op add-ons</a>
+  <a href="#next">What's next</a>
+</nav>
+
+<!-- ============ ARCHITECTURE ============ -->
+<section id="arch">
+  <h2><span class="u">System design</span>: the drawboard</h2>
+  <p class="sub">The main PC hosts, the STRIX laptop joins. Nobody uses Hamachi or ZeroTier: PrivCord's own peer-to-peer tunnel carries the game traffic, so each player's mod simply connects to <code>127.0.0.1:5050</code> on their own machine.</p>
+  <div class="scroll" role="img" aria-label="Architecture diagram: main PC host and STRIX laptop connected by the PrivCord tunnel, both installed from Google Drive">
+  <svg viewBox="0 0 1200 830" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <filter id="wob" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.018" numOctaves="2" seed="7"/><feDisplacementMap in="SourceGraphic" scale="3.5"/></filter>
+      <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1d2129"/></marker>
+      <marker id="ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1d4fc4"/></marker>
+      <marker id="aho" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d9770a"/></marker>
+    </defs>
+
+    <!-- HOST -->
+    <g filter="url(#wob)" fill="none" stroke-linejoin="round">
+      <rect x="20" y="62" width="500" height="610" rx="16" stroke="#1d4fc4" stroke-width="4" fill="#ffffff" fill-opacity=".55"/>
+      <rect x="40" y="122" width="460" height="84" rx="10" stroke="#1d4fc4" stroke-width="3" fill="#d7ecff"/>
+      <rect x="40" y="226" width="220" height="104" rx="10" stroke="#7a3fb0" stroke-width="3" fill="#f1e6fb"/>
+      <rect x="280" y="226" width="220" height="104" rx="10" stroke="#1d4fc4" stroke-width="3" fill="#d7ecff"/>
+      <rect x="280" y="348" width="220" height="62" rx="10" stroke="#7a3fb0" stroke-width="3" fill="#f1e6fb"/>
+      <rect x="40" y="428" width="460" height="150" rx="10" stroke="#1b8a4a" stroke-width="3.5" fill="#dcf5df"/>
+      <rect x="40" y="596" width="460" height="62" rx="10" stroke="#1d4fc4" stroke-width="3" fill="#d7ecff"/>
+    </g>
+    <text x="40" y="100" class="mk" font-size="23" fill="#1d4fc4" style="fill:#1d4fc4">MAIN PC · host · “blackz”</text>
+    <text x="56" y="152" font-size="18" font-weight="700">PrivCord app (Tauri · Rust + React)</text>
+    <text x="56" y="176" font-size="15">Host button → server + tunnel host + sidecars,</text>
+    <text x="56" y="196" font-size="15">then posts the session card in chat</text>
+    <text x="54" y="254" font-size="16.5" font-weight="700">BOTW.DedicatedServer</text>
+    <text x="54" y="276" class="mono">.NET 6 · 127.0.0.1:5050</text>
+    <text x="54" y="298" class="mono">stdin = open pipe</text>
+    <text x="54" y="319" class="mono">IP=127.0.0.1</text>
+    <text x="294" y="254" font-size="16.5" font-weight="700">Co-op side channels</text>
+    <text x="294" y="276" class="mono">:5051 party feed</text>
+    <text x="294" y="298" class="mono">:5053 downed relay</text>
+    <text x="294" y="319" class="mono">console: _Get · Tp</text>
+    <text x="294" y="374" font-size="16.5" font-weight="700">BOTWM client (WPF)</text>
+    <text x="294" y="397" class="mono">ShellExecuteW, no NUL handles</text>
+    <text x="56" y="456" font-size="18" font-weight="700" style="fill:#1b8a4a">Cemu 1.26.2 + InjectDLL.dll</text>
+    <rect x="58" y="470" width="150" height="38" rx="8" fill="#ffffff" stroke="#1b8a4a" stroke-width="2"/>
+    <text x="72" y="495" font-size="16">Link (you)</text>
+    <rect x="222" y="470" width="262" height="38" rx="8" fill="#ffffff" stroke="#7a3fb0" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="236" y="495" font-size="16">Jugador2 = Kev's puppet</text>
+    <text x="56" y="532" class="mono">packs: BCML (fsPriority 9999) · utilities v6 ·</text>
+    <text x="56" y="550" class="mono">Extended Memory · FPS++ · PrivCordDowned ·</text>
+    <text x="56" y="568" class="mono">PrivCordCoopDifficulty · Graphics (Github833)</text>
+    <text x="56" y="622" font-size="16.5" font-weight="700">Sidecars: downed (10 Hz) · smoothing (~2 kHz)</text>
+    <text x="56" y="645" class="mono">ReadProcessMemory / NtWriteVirtualMemory into Cemu</text>
+
+    <!-- host arrows -->
+    <path d="M150 206 V224" stroke="#1d2129" stroke-width="2.5" marker-end="url(#ah)" fill="none"/>
+    <path d="M150 428 V334" stroke="#1d2129" stroke-width="2.5" marker-end="url(#ah)" fill="none"/>
+    <text x="158" y="372" font-size="14.5">DLL connects</text>
+    <text x="158" y="390" class="mono">TCP 127.0.0.1:5050</text>
+    <path d="M390 410 V426" stroke="#1d2129" stroke-width="2.5" marker-end="url(#ah)" fill="none"/>
+    <path d="M270 596 V582" stroke="#1d4fc4" stroke-width="2.5" marker-end="url(#ahb)" fill="none"/>
+
+    <!-- TUNNEL -->
+    <text x="600" y="98" text-anchor="middle" class="mk" font-size="19" style="fill:#1d4fc4">PrivCord tunnel</text>
+    <text x="600" y="120" text-anchor="middle" class="mono">iroh P2P · “Direct · 6 ms”</text>
+    <g filter="url(#wob)">
+      <rect x="520" y="140" width="160" height="56" rx="26" fill="#d7ecff" stroke="#1d4fc4" stroke-width="3.5"/>
+    </g>
+    <line x1="530" y1="168" x2="670" y2="168" stroke="#1d4fc4" stroke-width="3" class="flowline"/>
+    <g>
+      <rect class="pkt" x="532" y="158" width="18" height="20" rx="3" fill="#ffffff" stroke="#1d2129" stroke-width="2"/>
+      <rect class="pkt d2" x="532" y="158" width="18" height="20" rx="3" fill="#ffffff" stroke="#1d2129" stroke-width="2"/>
+      <rect class="pkt d3" x="532" y="158" width="18" height="20" rx="3" fill="#ffffff" stroke="#1d2129" stroke-width="2"/>
+    </g>
+    <text x="600" y="220" text-anchor="middle" class="mono">TCP 5050 (framed) · 5051 · 5053</text>
+    <ellipse cx="600" cy="168" rx="98" ry="38"fill="none" stroke="#d2362a" stroke-width="3" stroke-dasharray="7 6" filter="url(#wob)"/>
+    <text x="600" y="258" text-anchor="middle" font-size="16" font-weight="700" style="fill:#d2362a">the long bug lived here ↑</text>
+    <text x="600" y="278" text-anchor="middle" font-size="14.5" style="fill:#d2362a">messages arrived in pieces</text>
+    <path d="M300 206 C 300 222, 260 226, 250 230" stroke="#1d4fc4" stroke-width="2.5" fill="none" stroke-dasharray="6 5" marker-end="url(#ahb)"/>
+    <text x="318" y="221" class="mono" style="fill:#1d4fc4">dials 127.0.0.1:5050</text>
+
+    <!-- FRIEND -->
+    <g filter="url(#wob)" fill="none" stroke-linejoin="round">
+      <rect x="680" y="62" width="500" height="610" rx="16" stroke="#7a3fb0" stroke-width="4" fill="#ffffff" fill-opacity=".55"/>
+      <rect x="700" y="122" width="460" height="84" rx="10" stroke="#1d4fc4" stroke-width="3" fill="#d7ecff"/>
+      <rect x="700" y="226" width="220" height="104" rx="10" stroke="#7a3fb0" stroke-width="3" fill="#f1e6fb"/>
+      <rect x="940" y="226" width="220" height="104" rx="10" stroke="#1d4fc4" stroke-width="3" fill="#d7ecff"/>
+      <rect x="700" y="428" width="460" height="150" rx="10" stroke="#1b8a4a" stroke-width="3.5" fill="#dcf5df"/>
+      <rect x="700" y="596" width="460" height="62" rx="10" stroke="#1d4fc4" stroke-width="3" fill="#d7ecff"/>
+    </g>
+    <text x="700" y="100" class="mk" font-size="23" style="fill:#7a3fb0">STRIX laptop · friend · “Kev”</text>
+    <text x="716" y="152" font-size="18" font-weight="700">PrivCord app (Join on the card)</text>
+    <text x="716" y="176" font-size="15">tunnel binds local 127.0.0.1:5050, plus free</text>
+    <text x="716" y="196" font-size="15">ports for 5051 / 5053</text>
+    <text x="714" y="254" font-size="16.5" font-weight="700">BOTWM client (WPF)</text>
+    <text x="714" y="276" class="mono">Lobby → 127.0.0.1:5050</text>
+    <text x="714" y="298" font-size="14.5">(the tutorial used the</text>
+    <text x="714" y="317" font-size="14.5">host's Hamachi IP here)</text>
+    <text x="954" y="254" font-size="16.5" font-weight="700">Party list on card</text>
+    <text x="954" y="276" class="mono">Go to / Bring (Tp)</text>
+    <text x="954" y="298" class="mono">hearts · distance</text>
+    <text x="954" y="319" class="mono">downed → relay</text>
+    <text x="716" y="456" font-size="18" font-weight="700" style="fill:#1b8a4a">Cemu 1.26.2 + InjectDLL.dll</text>
+    <rect x="718" y="470" width="150" height="38" rx="8" fill="#ffffff" stroke="#1b8a4a" stroke-width="2"/>
+    <text x="732" y="495" font-size="16">Link (you)</text>
+    <rect x="882" y="470" width="262" height="38" rx="8" fill="#ffffff" stroke="#7a3fb0" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="896" y="495" font-size="16">Jugador1 = blackz's puppet</text>
+    <text x="716" y="538" class="mono">same packs, same EUR v208 + DLC v80 dump,</text>
+    <text x="716" y="558" class="mono">same Cemu build (all SHA-256 pinned)</text>
+    <text x="716" y="622" font-size="16.5" font-weight="700">Sidecars: downed · smoothing (same code)</text>
+    <text x="716" y="645" class="mono">G key = hold 12 s to revive a friend</text>
+
+    <path d="M680 168 H 692" stroke="#1d4fc4" stroke-width="3" fill="none"/>
+    <path d="M520 168 H 504" stroke="#1d4fc4" stroke-width="3" fill="none"/>
+    <path d="M930 428 V210" stroke="#1d2129" stroke-width="2.5" marker-end="url(#ah)" fill="none"/>
+    <text x="940" y="372" class="mono">DLL → 127.0.0.1:5050</text>
+    <path d="M810 330 V426" stroke="#1d2129" stroke-width="2.5" marker-end="url(#ah)" fill="none"/>
+    <text x="712" y="404" font-size="14.5">starts Cemu +</text>
+    <text x="712" y="421" font-size="14.5">injects DLL</text>
+    <path d="M930 596 V582" stroke="#1d4fc4" stroke-width="2.5" marker-end="url(#ahb)" fill="none"/>
+
+    <!-- DRIVE -->
+    <g filter="url(#wob)">
+      <rect x="350" y="712" width="500" height="104" rx="22" fill="#fff6e8" stroke="#d9770a" stroke-width="3.5" stroke-dasharray="10 6"/>
+    </g>
+    <text x="600" y="742" text-anchor="middle" class="mk" font-size="19" style="fill:#d9770a">Google Drive · “PrivCord Ports” folder</text>
+    <text x="600" y="766" text-anchor="middle" class="mono">botw-eur-mp-game-bundle.tar (31.9 GB) · botw-multiplayer-1.0.4.zip</text>
+    <text x="600" y="786" text-anchor="middle" class="mono">botwmp-graphic-packs.zip · cemu-1.26.2 / cemu-2.6 zips</text>
+    <text x="600" y="806" text-anchor="middle" font-size="14.5">every file SHA-256 pinned the first time it is installed</text>
+    <path d="M350 760 C 280 760, 270 720, 270 676" stroke="#d9770a" stroke-width="3" fill="none" marker-end="url(#aho)"/>
+    <path d="M850 760 C 920 760, 930 720, 930 676" stroke="#d9770a" stroke-width="3" fill="none" marker-end="url(#aho)"/>
+    <text x="196" y="706" font-size="15" style="fill:#d9770a">Install (one click)</text>
+    <text x="940" y="706" font-size="15" style="fill:#d9770a">Install (one click)</text>
+
+    <!-- moving traffic -->
+    <g class="smil">
+      <circle r="6" fill="#7a3fb0"><animateMotion dur="1.6s" repeatCount="indefinite" path="M150 428 V334"/></circle>
+      <circle r="6" fill="#7a3fb0"><animateMotion dur="1.6s" begin="0.8s" repeatCount="indefinite" path="M150 334 V428"/></circle>
+      <circle r="6" fill="#7a3fb0"><animateMotion dur="2.2s" repeatCount="indefinite" path="M930 428 V210"/></circle>
+      <circle r="6" fill="#7a3fb0"><animateMotion dur="2.2s" begin="1.1s" repeatCount="indefinite" path="M930 210 V428"/></circle>
+      <circle r="5" fill="#1d4fc4"><animateMotion dur="1.4s" repeatCount="indefinite" path="M300 206 C 300 222, 260 226, 250 230"/></circle>
+      <circle r="5" fill="#1d4fc4"><animateMotion dur="0.9s" repeatCount="indefinite" path="M270 596 V582"/></circle>
+      <circle r="5" fill="#1d4fc4"><animateMotion dur="0.9s" begin="0.45s" repeatCount="indefinite" path="M930 596 V582"/></circle>
+      <rect x="-9" y="-7" width="18" height="14" rx="3" fill="#fff6e8" stroke="#d9770a" stroke-width="2"><animateMotion dur="3s" repeatCount="indefinite" path="M350 760 C 280 760, 270 720, 270 676"/></rect>
+      <rect x="-9" y="-7" width="18" height="14" rx="3" fill="#fff6e8" stroke="#d9770a" stroke-width="2"><animateMotion dur="3s" begin="1.5s" repeatCount="indefinite" path="M850 760 C 920 760, 930 720, 930 676"/></rect>
+    </g>
+  </svg>
+  </div>
+  <p class="diagram-note">Port map: <b>5050</b> = the mod's dedicated server (the only stream that needed framing), <b>5051</b> = PrivCord party feed (who's in, hearts, distance, teleports), <b>5053</b> = downed/revive relay. On the friend's PC, 5051 and 5053 go to any free local port so a busy port can't break a join.</p>
+</section>
+
+<!-- ============ REAL TIME ============ -->
+<section id="realtime">
+  <h2>How both players <span class="u">see each other</span> in real time</h2>
+  <p class="sub">One position update, start to finish, from Kev's Link on STRIX to Kev's puppet on the main PC. The same trip runs in the other direction at the same time.</p>
+  <div class="scroll" role="img" aria-label="Sequence diagram of one position update travelling from the friend's game to the host's screen">
+  <svg viewBox="0 0 1120 640" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="sa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1d2129"/></marker>
+      <marker id="sg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b8a4a"/></marker>
+      <marker id="sp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7a3fb0"/></marker>
+      <marker id="sb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1d4fc4"/></marker>
+      <filter id="wob2"><feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="2" seed="3"/><feDisplacementMap in="SourceGraphic" scale="3"/></filter>
+    </defs>
+    <g filter="url(#wob2)">
+      <rect x="20" y="16" width="140" height="52" rx="10" fill="#dcf5df" stroke="#1b8a4a" stroke-width="3"/>
+      <rect x="200" y="16" width="140" height="52" rx="10" fill="#f1e6fb" stroke="#7a3fb0" stroke-width="3"/>
+      <rect x="380" y="16" width="140" height="52" rx="10" fill="#d7ecff" stroke="#1d4fc4" stroke-width="3"/>
+      <rect x="560" y="16" width="140" height="52" rx="10" fill="#f1e6fb" stroke="#7a3fb0" stroke-width="3"/>
+      <rect x="740" y="16" width="140" height="52" rx="10" fill="#f1e6fb" stroke="#7a3fb0" stroke-width="3"/>
+      <rect x="920" y="16" width="180" height="52" rx="10" fill="#dcf5df" stroke="#1b8a4a" stroke-width="3"/>
+    </g>
+    <text x="90" y="40" text-anchor="middle" font-size="16" font-weight="700">Kev's game</text><text x="90" y="59" text-anchor="middle" font-size="13">STRIX · Cemu</text>
+    <text x="270" y="40" text-anchor="middle" font-size="16" font-weight="700">Kev's DLL</text><text x="270" y="59" text-anchor="middle" font-size="13">InjectDLL.dll</text>
+    <text x="450" y="40" text-anchor="middle" font-size="16" font-weight="700">PrivCord tunnel</text><text x="450" y="59" text-anchor="middle" font-size="13">copy_framed</text>
+    <text x="630" y="40" text-anchor="middle" font-size="16" font-weight="700">BOTW server</text><text x="630" y="59" text-anchor="middle" font-size="13">main PC :5050</text>
+    <text x="810" y="40" text-anchor="middle" font-size="16" font-weight="700">blackz's DLL</text><text x="810" y="59" text-anchor="middle" font-size="13">main PC</text>
+    <text x="1010" y="40" text-anchor="middle" font-size="16" font-weight="700">blackz's screen</text><text x="1010" y="59" text-anchor="middle" font-size="13">Jugador2 puppet</text>
+    <g stroke="#9aa1aa" stroke-width="2" stroke-dasharray="4 6">
+      <line x1="90" y1="70" x2="90" y2="625"/><line x1="270" y1="70" x2="270" y2="625"/><line x1="450" y1="70" x2="450" y2="625"/>
+      <line x1="630" y1="70" x2="630" y2="625"/><line x1="810" y1="70" x2="810" y2="625"/><line x1="1010" y1="70" x2="1010" y2="625"/>
+    </g>
+
+    <text x="30" y="104" class="mk" font-size="18">1</text>
+    <path d="M92 118 H266" stroke="#1d2129" stroke-width="2.5" marker-end="url(#sa)"/>
+    <text x="100" y="110" font-size="14.5">reads Link xyz from guest RAM</text>
+    <text x="100" y="140" class="mono">signature scan “LocationAccess”</text>
+
+    <text x="30" y="174" class="mk" font-size="18">2</text>
+    <path d="M272 184 H446" stroke="#7a3fb0" stroke-width="2.5" marker-end="url(#sp)"/>
+    <text x="280" y="176" font-size="14.5">C→S update, every frame</text>
+    <text x="280" y="204" class="mono">7168 B · pos @0x0d (LE f32)</text>
+
+    <text x="30" y="240" class="mk" font-size="18">3</text>
+    <path d="M452 250 H626" stroke="#1b8a4a" stroke-width="3.5" marker-end="url(#sg)"/>
+    <text x="458" y="242" font-size="14.5" font-weight="700" style="fill:#1b8a4a">re-glued: ONE 7168 B write</text>
+    <text x="458" y="270" class="mono">(before the fix: random pieces)</text>
+
+    <text x="30" y="306" class="mk" font-size="18">4</text>
+    <rect x="566" y="290" width="128" height="50" rx="8" fill="#ffffff" stroke="#7a3fb0" stroke-width="2.5"/>
+    <text x="630" y="311" text-anchor="middle" class="mono">UpdatePlayerData</text>
+    <text x="630" y="330" text-anchor="middle" class="mono">Updated[1][2]=1</text>
+
+    <text x="30" y="376" class="mk" font-size="18">5</text>
+    <path d="M808 380 H634" stroke="#7a3fb0" stroke-width="2.5" marker-end="url(#sp)"/>
+    <text x="640" y="372" font-size="14.5">blackz's own update = a request</text>
+    <path d="M632 412 H806" stroke="#7a3fb0" stroke-width="2.5" marker-end="url(#sp)"/>
+    <text x="640" y="434" class="mono">reply 213 B · Kev pos @0x12</text>
+    <text x="640" y="452" class="mono">ClosePlayer.Updated = 1</text>
+
+    <text x="30" y="488" class="mk" font-size="18">6</text>
+    <path d="M812 496 H1006" stroke="#7a3fb0" stroke-width="2.5" marker-end="url(#sp)"/>
+    <text x="818" y="488" font-size="14.5">first time: spawn the puppet</text>
+    <text x="818" y="516" class="mono">ActorCreator::createActor 0x037b6040</text>
+
+    <text x="30" y="552" class="mk" font-size="18">7</text>
+    <path d="M812 560 H1006" stroke="#7a3fb0" stroke-width="2.5" marker-end="url(#sp)"/>
+    <text x="818" y="552" font-size="14.5">every 16 ms: pos + v·t →</text>
+    <text x="818" y="580" class="mono">Havok motion state (+0x30)</text>
+
+    <text x="30" y="612" class="mk" font-size="18" style="fill:#1d4fc4">8</text>
+    <path d="M820 612 H1006" stroke="#1d4fc4" stroke-width="3" marker-end="url(#sb)" stroke-dasharray="8 5"/>
+    <text x="470" y="608" font-size="14.5" style="fill:#1d4fc4" font-weight="700">PrivCord smoothing sidecar:</text>
+    <text x="470" y="626" font-size="14.5" style="fill:#1d4fc4">replays positions ~45 ms behind (jitter buffer)</text>
+    <g class="smil">
+      <circle r="10" fill="#d9770a" stroke="#ffffff" stroke-width="3">
+        <animateMotion dur="8s" repeatCount="indefinite" calcMode="linear" path="M90 118 L270 118 L270 184 L450 184 L450 250 L630 250 L630 315 L630 412 L810 412 L810 496 L1010 496 L1010 560 L1010 612"/>
+      </circle>
+    </g>
+  </svg>
+  </div>
+  <div class="two">
+    <div class="box">
+      <h3>Why it's “real time”</h3>
+      <ul>
+        <li>The server is strictly request/response: every client update gets an immediate snapshot back, so there is no server tick to wait for.</li>
+        <li>The DLL writes the puppet's position every 16 ms (one 60 fps frame), extrapolating with the last velocity.</li>
+        <li>The tunnel ran <b>Direct · 6 ms</b> between the two PCs on the LAN.</li>
+        <li>The map shows every other player as a live marker with their name; “HP: n” appears when close. That comes from the mod, we built nothing for it.</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3>What made it look choppy (and the fix)</h3>
+      <ul>
+        <li>STRIX is on Wi-Fi, which batches packets: updates arrived 20 ms apart, then <b>36–40 ms</b> late, then two at once (~4 ms).</li>
+        <li>A late update means a frozen puppet; a late pair means a jump. 14% of frames were frozen.</li>
+        <li>Fix: a jitter buffer next to the game. No game patch, no DLL change. It reads what the DLL received and writes a smoothed position right after each DLL write.</li>
+        <li>Result: <b>0%</b> frozen frames, step p90 0.22 → 0.137 m.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="demo" aria-label="Animation comparing raw and smoothed remote player movement">
+    <h3>Watch it: Kev walking, as seen on blackz's screen</h3>
+    <div class="arrivals-row">
+      <b>Updates arriving over Wi-Fi</b>
+      <div class="arrivals" aria-hidden="true">
+        <i style="left:2%"></i><i style="left:6%"></i><i style="left:14%"></i><i style="left:15%"></i><i style="left:19%"></i><i style="left:23%"></i><i style="left:34%"></i><i style="left:35.5%"></i><i style="left:39%"></i><i style="left:43%"></i><i style="left:54%"></i><i style="left:55%"></i><i style="left:59%"></i><i style="left:63%"></i><i style="left:74%"></i><i style="left:75.5%"></i><i style="left:79%"></i><i style="left:83%"></i><i style="left:94%"></i><i style="left:95%"></i>
+        <span class="gap" style="left:23%;width:11%">40 ms late</span>
+        <span class="gap" style="left:63%;width:11%">40 ms late</span>
+      </div>
+    </div>
+    <div class="arrivals-row">
+      <b style="color:var(--red)">Raw (the mod alone)</b>
+      <div class="track raw"><div class="who"><svg viewBox="0 0 34 40" aria-hidden="true"><circle cx="17" cy="9" r="7" fill="#f4d7b5" stroke="#1d2129" stroke-width="2"/><path d="M10 6 L17 -1 L26 8 Z" fill="#1b8a4a" stroke="#1d2129" stroke-width="1.5"/><path d="M9 18 H25 L27 32 H7 Z" fill="#1b8a4a" stroke="#1d2129" stroke-width="2"/><path d="M12 32 V39 M22 32 V39" stroke="#1d2129" stroke-width="3"/></svg></div></div>
+    </div>
+    <div class="arrivals-row">
+      <b style="color:var(--green)">Smoothed (PrivCord)</b>
+      <div class="track smooth"><div class="who"><svg viewBox="0 0 34 40" aria-hidden="true"><circle cx="17" cy="9" r="7" fill="#f4d7b5" stroke="#1d2129" stroke-width="2"/><path d="M10 6 L17 -1 L26 8 Z" fill="#1b8a4a" stroke="#1d2129" stroke-width="1.5"/><path d="M9 18 H25 L27 32 H7 Z" fill="#1b8a4a" stroke="#1d2129" stroke-width="2"/><path d="M12 32 V39 M22 32 V39" stroke="#1d2129" stroke-width="3"/></svg></div></div>
+    </div>
+    <p class="diagram-note">Top: updates arrive in bunches with late gaps. Middle: drawing each one the moment it lands freezes, then jumps. Bottom: playing them back ~45 ms behind at a steady rate hides the gaps.</p>
+  </div>
+</section>
+
+<!-- ============ LONG BUG ============ -->
+<section id="longbug">
+  <h2>The long bug: <span class="u">ghost Links</span> that kept vanishing</h2>
+  <p class="sub">Symptom: both players joined, both games said “Player Kev joined”, a T-posed Link with the right name tag appeared… and was erased about a second later, every 3 seconds, forever. Three sessions went into this. Press the buttons to see what was really happening on the wire.</p>
+  <div class="bugsim">
+    <div class="toggle" role="group" aria-label="Choose a connection">
+      <button type="button" id="b-loop" data-mode="loop" aria-pressed="false">Over loopback (same PC)</button>
+      <button type="button" id="b-before" data-mode="before" aria-pressed="true">Over the tunnel, before the fix</button>
+      <button type="button" id="b-after" data-mode="after" aria-pressed="false">Over the tunnel, with framing</button>
+    </div>
+    <div class="lane"><b>Client sends</b><div class="bytes"><div class="chunk" style="flex:7168">one update · 7,168 bytes</div></div></div>
+    <div class="lane"><b>Server's reads</b><div class="bytes" id="reads"></div></div>
+    <div class="lane"><b>What the server's list holds</b><div class="bytes" id="list"></div></div>
+    <div class="verdict" id="verdict" aria-live="polite"></div>
+  </div>
+
+  <div class="two">
+    <div class="demo">
+      <h3 style="color:var(--red)">Before: the ghost loop</h3>
+      <div class="stage" aria-label="Animation: a T-posed puppet appears, drops and vanishes every 3 seconds">
+        <div class="ghost" id="ghost"><svg viewBox="0 0 60 60" width="60" height="60" aria-hidden="true"><circle cx="30" cy="10" r="7" fill="#ffffff" stroke="#7a3fb0" stroke-width="2.5"/><path d="M4 24 H56 M30 17 V42 M30 42 L20 58 M30 42 L40 58" stroke="#7a3fb0" stroke-width="3.5" stroke-linecap="round" fill="none"/></svg><span>Kev</span></div>
+        <div class="stage-label">spawn → snapped to (0,0,0) → “fell out of the world” → erased → respawn in 3 s</div>
+      </div>
+      <p class="diagram-note">Spawned <b id="g-sp">1</b> · erased <b id="g-er">0</b> <span>(STRIX's real count: 46 / 44)</span></p>
+    </div>
+    <div class="demo">
+      <h3 style="color:var(--green)">After framing: the puppet stays</h3>
+      <div class="stage" aria-label="Animation: the puppet stays in the world and walks back and forth">
+        <div class="stayer"><svg viewBox="0 0 34 40" width="40" height="48" aria-hidden="true"><circle cx="17" cy="9" r="7" fill="#f4d7b5" stroke="#1d2129" stroke-width="2"/><path d="M10 6 L17 -1 L26 8 Z" fill="#1b8a4a" stroke="#1d2129" stroke-width="1.5"/><path d="M9 18 H25 L27 32 H7 Z" fill="#1b8a4a" stroke="#1d2129" stroke-width="2"/><path d="M12 32 V39 M22 32 V39" stroke="#1d2129" stroke-width="3"/></svg><span>Kev</span></div>
+        <div class="stage-label">real position every update → the game keeps the actor</div>
+      </div>
+      <p class="diagram-note">Spawned once, erased 0 times, follows Kev's real movement.</p>
+    </div>
+  </div>
+
+  <div class="pair">
+    <div class="snip no">
+      <span class="tag">✗ what the mod's server does (pseudocode)</span>
+<pre><span class="c">// receive loop, as we observed it</span>
+buffer = <span class="s">10 KB</span>
+<span class="k">while</span> received &lt; <span class="s">6144</span>:
+    received += read(socket, buffer)  <span class="c"># maybe 1,400 bytes…</span>
+<span class="x">    message.append(ALL of buffer)     # …but appends all 10 KB</span>
+parse(message) <span class="c"># misaligned → "unknown type" → dropped</span></pre>
+      <span class="src">Fine over loopback, where 7,168 bytes arrive in one read. We can't change it: the mod is closed and final.</span>
+    </div>
+    <div class="snip yes">
+      <span class="tag">✓ our tunnel re-glues every message</span>
+<pre><span class="c">// catalog.rs: how to cut the friend's stream</span>
+NativeId::BotwMp =&gt; vec![(<span class="s">5050</span>, TcpFraming {
+    by_first_byte: vec![(<span class="s">1</span>, <span class="s">6144</span>)], <span class="c">// ping</span>
+    default: <span class="s">7168</span>,                  <span class="c">// connect / update</span>
+})],
+
+<span class="c">// tunnel.rs: copy_framed (core loop)</span>
+<span class="k">while</span> filled &lt; size {
+    <span class="k">let</span> n = r.read(&amp;<span class="k">mut</span> buf[filled..size]).<span class="k">await</span>?;
+    <span class="k">if</span> filled == <span class="s">0</span> { size = framing.size_for(buf[<span class="s">0</span>]); }
+    filled += n;
+}
+<span class="ok">w.write_all(&amp;buf[..size]).await?; // one whole message</span></pre>
+      <span class="src">crates/privcord-games/src/tunnel.rs · catalog.rs · test: framed_copy_delivers_whole_messages</span>
+    </div>
+  </div>
+
+  <div class="box">
+    <h3>The chain we had to measure, link by link, to get here</h3>
+    <div class="chain">
+      <span class="n">split message</span><span class="arr">→</span>
+      <span class="n">server drops Kev's updates</span><span class="arr">→</span>
+      <span class="n">Updated flag never set (0 of 227,150)</span><span class="arr">→</span>
+      <span class="n">host DLL's copy of Kev stays (0,0,0)</span><span class="arr">→</span>
+      <span class="n r">PThread writes (0,0,0) into the puppet at ~233 ms</span><span class="arr">→</span>
+      <span class="n">game's “fell out of the world” check (20 m)</span><span class="arr">→</span>
+      <span class="n">requestDelete → deleteLater</span><span class="arr">→</span>
+      <span class="n">OnActorErase</span><span class="arr">→</span>
+      <span class="n r">DLL respawns 3 s later: ghost loop</span>
+    </div>
+    <p>We started at the end of that chain and walked backwards. The step that broke it open: attaching as a debugger and putting a <b>hardware write breakpoint</b> on the puppet's Havok motion state (<code>watch-writer.ps1</code>). Until ~227 ms only game code wrote there; from ~233 ms it was <b>InjectDLL+0x3a3b2 writing zeros</b>. So the game wasn't killing the puppet, the mod was feeding it a zero position. From there <code>players2.py</code> showed the DLL's cached position for Kev never changed, and a logging proxy (<code>proxy.py</code> on port 5051 → 5050) showed the server never sent <code>Updated = 1</code>. The server log's <code>[Kev] Retried N times</code> (45×) was the last clue: the server was choking on Kev's messages.</p>
+  </div>
+</section>
+
+<!-- ============ VS ORIGINAL ============ -->
+<section id="versus">
+  <h2>The original PointCrow mod vs <span class="u">the PrivCord way</span></h2>
+  <p class="sub">BOTW Multiplayer 1.0.4 was made by the team around PointCrow (lead dev MadMilkman) and taken down after Nintendo takedowns, so 1.0.4 is final and nobody fixes it any more. <b>We did not change a single byte of it</b>: the server, the injected DLL and the mod's game files are untouched. Everything PrivCord does sits around the mod: how it is installed, launched, connected, configured and extended.</p>
+
+  <div class="race" aria-label="Animated comparison: the tutorial's manual setup steps vs PrivCord's two clicks">
+    <div class="demo">
+      <h3>The tutorial way (per player)</h3>
+      <ol class="steps" id="steps-old">
+        <li>Install Hamachi, join the host's network</li>
+        <li>Install Python + BCML</li>
+        <li>Merge the mod's BNP files in BCML</li>
+        <li>Find the right Cemu version (older than 2.0-47)</li>
+        <li>Dump the game, update v208 and DLC</li>
+        <li>Install update + DLC into Cemu's storage</li>
+        <li>Download Extended Memory + FPS++ packs</li>
+        <li>Enable the right graphic packs</li>
+        <li>Set up a controller profile</li>
+        <li>Install the .NET 6 Desktop Runtime</li>
+        <li>Make a single-player save first</li>
+        <li>Host: run the server, answer its console prompt</li>
+        <li>Share your Hamachi IP, friend types it in</li>
+      </ol>
+    </div>
+    <div class="demo">
+      <h3>The PrivCord way</h3>
+      <ol class="steps" id="steps-new">
+        <li><b>Install</b> (game, mod, Cemu, packs, settings, profile: all automatic, hash-checked)</li>
+        <li><b>Host</b> or <b>Join</b> on the card in chat</li>
+      </ol>
+      <div class="playing" id="playing">▶ playing together</div>
+      <p class="diagram-note">Still manual today: the .NET 6 Desktop Runtime and one single-player save.</p>
+    </div>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Area</th><th>Original mod, tutorial setup</th><th>PrivCord</th></tr></thead>
+      <tbody>
+        <tr><td>Network</td><td>Hamachi VPN; the host shares an IP; port 5050 is reachable by anyone on that VPN network</td><td>PrivCord's own P2P tunnel; the server only listens on 127.0.0.1, and only room members with the session's tunnel ticket can reach it</td></tr>
+        <tr><td>Messages on a real network</td><td>Server mis-parses any message that arrives in pieces; it works on one PC and often on a LAN, but a joiner's updates get dropped</td><td>Tunnel re-glues each message to exactly 7,168 / 6,144 bytes before the server sees it</td></tr>
+        <tr><td>Mod files</td><td>Merge BNPs with BCML (needs Python)</td><td>The merged result ships as a Cemu graphic-pack overlay; no Python, no BCML window</td></tr>
+        <tr><td>Cemu</td><td>Set up by hand; easy to pick a version or pack format that silently doesn't work</td><td>Pinned Cemu 1.26.2 with every required pack in the right format, update/DLC junctions, keyboard profile; backups of anything it changes</td></tr>
+        <tr><td>Hosting</td><td>Run DedicatedServer.exe, answer the gamemode prompt, keep its window open</td><td>Server starts unattended, PrivCord waits until it's ready, stops it on Stop hosting or when PrivCord closes</td></tr>
+        <tr><td>Joining</td><td>Type the host's IP in the Lobby Browser</td><td>Press Join on the session card; the card shows the mode, enemy health and party</td></tr>
+        <tr><td>Other player's movement</td><td>Raw positions, freezes and jumps on Wi-Fi (14% frozen frames measured)</td><td>Jitter buffer: 0% frozen frames</td></tr>
+        <tr><td>Co-op tools</td><td>Teleport, weather, time, modes exist only as server console commands</td><td>Party list with hearts and distance, Go to / Bring buttons, one-click game modes, settings on the card</td></tr>
+        <tr><td>New gameplay</td><td>None beyond the mod</td><td>Enemy health ×1.5–3, downed &amp; revive, game over only when everyone is down, auto graphics preset + 120/144 fps</td></tr>
+        <tr><td>Credits</td><td>The original team</td><td>Kept as they are; PrivCord's additions say “Made by Blackz”; PrivCord ships none of the mod's files</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>What we had to fix around the mod, sorted by whose problem it was</h3>
+  <div class="ledger">
+    <div class="col theirs">
+      <h4>Bugs in their mod <small>(worked around, can't edit it)</small></h4>
+      <ul>
+        <li>Server corrupts messages that arrive split → <b>tunnel framing</b></li>
+        <li>Server crashes when stdin closes → <b>keep an open pipe</b></li>
+        <li>Server crashes on connect-then-close (GetPlayer(-1)) → <b>never probe it</b></li>
+        <li><code>IP=localhost</code> binds the LAN card → <b>rewrite to 127.0.0.1</b></li>
+        <li>DLL only scans the 8th memory region → <b>Extended Memory pack always on</b></li>
+        <li>Flag scan sometimes never finds the map pin (timing) → <b>still flaky, not fixed</b></li>
+      </ul>
+    </div>
+    <div class="col versions">
+      <h4>Version traps</h4>
+      <ul>
+        <li>Mod needs Cemu older than 2.0-47 → <b>separate Cemu 1.26.2</b></li>
+        <li>Utilities pack says <code>version = 7</code>, which 1.26.2 skips silently → <b>our v6 copy</b></li>
+        <li>New community graphics packs are v7 → <b>pinned to release Github833</b></li>
+        <li>Official Cemu 2.6 zip has a garbled file name → <b>re-staged without it</b></li>
+      </ul>
+    </div>
+    <div class="col ours">
+      <h4>Our own bugs</h4>
+      <ul>
+        <li>Client launched with NUL handles → Cemu 0xc0000409 → <b>ShellExecuteW</b></li>
+        <li>Readiness probe connected and killed the server → <b>bind check</b></li>
+        <li>“Cemu.exe” case mismatch → <b>lowercase both</b></li>
+        <li>Stale downed flag killed both players → <b>¼-heart check</b></li>
+        <li>Revive reset on one-tick blips → <b>0.6 s grace</b></li>
+        <li>Old join held port 5050 → <b>drop overlapping joins</b></li>
+        <li>Party feed reply had no size limit → <b>64 KiB cap</b></li>
+      </ul>
+    </div>
+    <div class="col env">
+      <h4>Hardware &amp; environment</h4>
+      <ul>
+        <li>Wi-Fi bunches packets → <b>jitter buffer</b></li>
+        <li>WriteProcessMemory 12 ms per call → <b>NtWriteVirtualMemory</b></li>
+        <li>Cemu controller set to Disabled → <b>Wii U GamePad + key map</b></li>
+        <li>GUI apps over SSH invisible → <b>schtasks /it</b></li>
+        <li>STRIX panel reports 60 Hz → <b>High preset at 60 fps</b></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="two">
+    <div class="box">
+      <h3 style="color:var(--green)">Why this is better than the plain mod</h3>
+      <ul>
+        <li><b>It works over a real connection.</b> The plain mod's server drops a joiner's updates whenever messages arrive in pieces. That is what made the ghost Links.</li>
+        <li><b>Two clicks instead of a 13-step guide</b>, with every package hash-checked and every change to your settings backed up.</li>
+        <li><b>Safer.</b> The server only listens on loopback, behind a tunnel only room members can use. With Hamachi, anyone on that network could reach it, and one bad connection could crash it.</li>
+        <li><b>Smoother.</b> The other player no longer freezes and jumps on Wi-Fi.</li>
+        <li><b>More game.</b> Harder enemies for two players, downed and revive, party HUD, teleport buttons, auto graphics.</li>
+        <li><b>Repeatable.</b> Install is idempotent and covered by end-to-end tests, so a re-run is a sub-second no-op.</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3 style="color:var(--red)">Where we're still limited by the original</h3>
+      <ul>
+        <li>We still depend on their closed DLL and server. Bugs inside them, like the flaky flag scan, can only be worked around.</li>
+        <li>Locked to old Cemu 1.26.2 and game version v208, Windows only.</li>
+        <li>The wire format is fixed, so new data (items, downed state) has to travel on our own side channels.</li>
+        <li>“Hunter vs Speedrunner” has no rules in 1.0.4; it's just a label.</li>
+        <li>The server supports 32 players; we have only tested 2.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ TIMELINE ============ -->
+<section id="timeline">
+  <h2>The road, <span class="u">session by session</span></h2>
+  <div class="timeline">
+    <div class="tl win">
+      <span class="when">Oct 18 · sessions 1–4</span>
+      <h3>Single-player BotW boots in Cemu</h3>
+      <ul>
+        <li>BotW EUR boots at 60 fps. The fix that unblocked play: Cemu's Controller 1 was set to “Disabled”; switched it to Wii U GamePad and mapped keys.</li>
+        <li>Mystery left alone on purpose: no <code>keys.txt</code> anywhere, yet the game boots. It works, so we stopped re-checking it.</li>
+        <li>BOTWM 1.0.4 mod found on the desktop and staged as one pinned zip.</li>
+      </ul>
+    </div>
+    <div class="tl">
+      <span class="when">Oct 18 · side quest</span>
+      <h3>PrivCord Network (ZeroTier) built, then taken out of the BotW flow</h3>
+      <ul>
+        <li>Embedded ZeroTier behind a branded panel, auto-leave on exit, public network so no approval step.</li>
+        <li>Then decided: BotW is <b>tunnel-only</b>. The tunnel needs nothing installed and no 10-device cap.</li>
+      </ul>
+    </div>
+    <div class="tl win">
+      <span class="when">Oct 18 · session 5</span>
+      <h3>One-click install, verified end to end</h3>
+      <ul>
+        <li>31.9 GB game bundle (base + Update v208 + DLC v80, as-is) → hashed → unpacked; mod; graphic packs; portable Cemu <code>settings.xml</code>; BCML settings.</li>
+        <li><code>botwmp_install_e2e</code> passes from scratch and again as a sub-second no-op.</li>
+      </ul>
+    </div>
+    <div class="tl win">
+      <span class="when">Oct 19 · session 6</span>
+      <h3>The dedicated server, live: two stock behaviours would have broken hosting</h3>
+      <ul>
+        <li>Closed/NUL stdin crashes it within a second. <code>IP=localhost</code> binds the LAN card, not loopback. Both fixed in code.</li>
+      </ul>
+    </div>
+    <div class="tl wall">
+      <span class="when">Oct 19 · session 7</span>
+      <h3>Two PCs connect… and the ghosts appear</h3>
+      <ul>
+        <li>Fixed: readiness probe killing the server, Cemu crashing 0xc0000409 on Connect, the DLL's memory scan never matching (needed Extended Memory), utilities pack silently skipped (version 7 → 6), move to Cemu 1.26.2.</li>
+        <li>Wall: both games see each other, but the puppet is erased every ~1 s and respawned every 3 s. 46 spawned, 44 erased.</li>
+      </ul>
+    </div>
+    <div class="tl wall">
+      <span class="when">Oct 19, 16:15–18:40 · session 8</span>
+      <h3>Tracing the erase inside the game</h3>
+      <ul>
+        <li>Wrote our own PowerPC trace patch (~35 hooks) with a ring buffer in a Cemu codecave, read out with ReadProcessMemory.</li>
+        <li>Mapped the full delete path: fall-out-of-world check → requestDelete → deleteLater → ~Actor → OnActorErase.</li>
+        <li>Wrong turns: “the create position is ignored”, stale copies, AI schedule, CharacterController state. Each one tested live and reverted.</li>
+      </ul>
+    </div>
+    <div class="tl win">
+      <span class="when">Oct 19, ~19:50 · session 9</span>
+      <h3>ROOT CAUSE: the server corrupts split messages</h3>
+      <ul>
+        <li>Hardware write breakpoint → DLL writes zeros → its cached position is zero → server never sets Updated → server mis-parses pieces.</li>
+        <li>Fix in PrivCord's tunnel: message framing. First real multiplayer between the two PCs.</li>
+      </ul>
+    </div>
+    <div class="tl win">
+      <span class="when">Oct 19 · session 10</span>
+      <h3>The hand setup becomes the installer</h3>
+      <ul>
+        <li>Cemu 1.26.2 with update/DLC junctions, the four packs, keyboard profile, BCML <code>cemu_dir</code>, backups of everything it touches.</li>
+      </ul>
+    </div>
+    <div class="tl win">
+      <span class="when">Oct 19–20 · two parallel branches, then merged</span>
+      <h3>Co-op features + gameplay upgrades</h3>
+      <ul>
+        <li><b>botwmp-coop</b>: co-op settings, party list, teleports, game modes, all through the server's own config file and console.</li>
+        <li><b>botwmp-gameplay</b>: enemy health ×1.5–3, downed/revive, auto max graphics + 120/144 fps, smooth remote player.</li>
+        <li>Merged; 72 unit tests pass; one combined build still to install on both PCs.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ STUCK ============ -->
+<section id="stuck">
+  <h2>Where we got <span class="u">stuck</span>, and how we got unstuck</h2>
+  <div class="notes">
+    <div class="note big">
+      <h3>Ghost Links, erased every second</h3>
+      <div class="lbl">symptom</div><p>T-posed puppet with the right name tag, gone in ~1 s, respawned every 3 s.</p>
+      <div class="lbl">unstuck by</div><p>Hardware write breakpoint → it was the DLL writing (0,0,0) → server never got Kev's updates.</p>
+      <p class="fix">✓ Message framing in the tunnel</p>
+    </div>
+    <div class="note">
+      <h3>Server dies at start</h3>
+      <div class="lbl">symptom</div><p>Exits within ~1 s, NullReferenceException.</p>
+      <div class="lbl">why</div><p>After starting it sits in a console loop; reading EOF from NUL stdin returns null and it crashes.</p>
+      <p class="fix">✓ Keep stdin an open pipe for as long as we host</p>
+    </div>
+    <div class="note">
+      <h3>Server unreachable on 127.0.0.1</h3>
+      <div class="lbl">symptom</div><p>Listening, but the tunnel and our wait never connected.</p>
+      <div class="lbl">why</div><p><code>IP=localhost</code> made it bind the PC's LAN address, not loopback.</p>
+      <p class="fix">✓ Rewrite the ini to <code>IP=127.0.0.1</code></p>
+    </div>
+    <div class="note">
+      <h3>Our health check killed the server</h3>
+      <div class="lbl">symptom</div><p>Server crashed as soon as PrivCord checked it was up.</p>
+      <div class="lbl">why</div><p>Connect-then-close made its error handler call <code>GetPlayer(-1)</code>, which throws.</p>
+      <p class="fix">✓ Never connect; check that binding 5050 fails instead</p>
+    </div>
+    <div class="note">
+      <h3>Cemu crashes 0xc0000409 on Connect</h3>
+      <div class="lbl">symptom</div><p>Cemu opens, then aborts after ~1 s.</p>
+      <div class="lbl">why</div><p>We started the client with NUL std handles; Cemu inherits them and the injected DLL aborts.</p>
+      <p class="fix">✓ Launch the client with ShellExecuteW, like Explorer</p>
+    </div>
+    <div class="note">
+      <h3>DLL can't find the game in memory</h3>
+      <div class="lbl">symptom</div><p>Every scan failed on both Cemu 2.6 and 1.26.2.</p>
+      <div class="lbl">why</div><p>It only searches the 8th memory region from the Wii U base; that layout exists only with the Extended Memory pack.</p>
+      <p class="fix">✓ Ship Extended Memory + FPS++, as the mod's guide says</p>
+    </div>
+    <div class="note">
+      <h3>Multiplayer patches silently ignored</h3>
+      <div class="lbl">symptom</div><p>Cemu 1.26.2 loaded nothing from the utilities pack.</p>
+      <div class="lbl">why</div><p>Its rules.txt said <code>version = 7</code>, a Cemu 2.0 format 1.26.2 skips without a word.</p>
+      <p class="fix">✓ Our own copy with <code>version = 6</code></p>
+    </div>
+    <div class="note">
+      <h3>Which Cemu?</h3>
+      <div class="lbl">symptom</div><p>Started on 2.6; the mod is reported to need older than 2.0-47.</p>
+      <div class="lbl">why</div><p>The mod's guide and DLL were built around 1.26.2.</p>
+      <p class="fix">✓ Separate Cemu 1.26.2 for multiplayer</p>
+    </div>
+    <div class="note">
+      <h3>Cemu 2.6 zip won't unpack</h3>
+      <div class="lbl">symptom</div><p>Windows tar exits 1: “empty or unreadable filename”.</p>
+      <div class="lbl">why</div><p>One garbled file name in the official zip: <code>resources/ar/⋏⋏cemu.mo</code>.</p>
+      <p class="fix">✓ Re-staged the zip without that one entry</p>
+    </div>
+    <div class="note">
+      <h3>“Cemu.exe” not found</h3>
+      <div class="lbl">why</div><p>File names are lowercased before matching; the needle wasn't. Every other emulator had a lowercase exe name.</p>
+      <p class="fix">✓ Lowercase the needle too</p>
+    </div>
+    <div class="note">
+      <h3>GUI apps on STRIX invisible</h3>
+      <div class="lbl">why</div><p>Anything started over SSH runs in a hidden session; anything from our shell inherits pipe handles (→ the 0xc0000409 crash).</p>
+      <p class="fix">✓ One-off scheduled task with <code>/it</code> on the laptop's desktop</p>
+    </div>
+    <div class="note">
+      <h3>Choppy remote player</h3>
+      <div class="lbl">why</div><p>Wi-Fi bunches updates (20 / 40 / 4 ms gaps). Ruled out Nagle and the server timer by measuring.</p>
+      <p class="fix">✓ Jitter buffer ~45 ms behind, rate-steered</p>
+    </div>
+    <div class="note">
+      <h3>Memory writes too slow</h3>
+      <div class="lbl">why</div><p><code>WriteProcessMemory</code> toggles page protection on Cemu's 3.3 GB guest region: ~12 ms per call.</p>
+      <p class="fix">✓ <code>NtWriteVirtualMemory</code> directly</p>
+    </div>
+    <div class="note">
+      <h3>Revive killed both players</h3>
+      <div class="lbl">why</div><p>A stale “downed” flag after a reload made a fresh sidecar think everyone was down.</p>
+      <p class="fix">✓ Flag only counts at exactly ¼ heart; silent friends count as standing for 30 s</p>
+    </div>
+    <div class="note">
+      <h3>“Port 5050 is busy” on Join</h3>
+      <div class="lbl">why</div><p>A join to an old, ended session still held the port, and ended cards have no Disconnect button.</p>
+      <p class="fix">✓ <code>game_join</code> drops joins whose local ports overlap</p>
+    </div>
+    <div class="note">
+      <h3>Needed a C++ compiler to read game files</h3>
+      <div class="lbl">why</div><p><code>roead</code> builds C++, which breaks on this PC's <code>CC</code> variable.</p>
+      <p class="fix">✓ Small hand-written Yaz0 / SARC / AAMP / BYML readers</p>
+    </div>
+    <div class="note">
+      <h3>Our own patches crashed the game</h3>
+      <div class="lbl">why</div><p>PowerPC <code>lwz rX, 0(r0)</code> means base address 0, not register r0. And an early fix patch clobbered LR, which broke every actor's destruction.</p>
+      <p class="fix">✓ Proper base registers; save/restore LR</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CODE ============ -->
+<section id="code">
+  <h2>Code: <span class="u">didn't work ✗ vs worked ✓</span></h2>
+  <p class="sub">Real code from the repo where marked with a path; “simplified” means trimmed to the line that matters.</p>
+
+  <div class="pair-wrap">
+    <h3>1 · Starting the dedicated server</h3>
+    <p>The server reads console commands after it starts. A NUL or closed stdin makes that read return null and it crashes.</p>
+    <div class="pair">
+      <div class="snip no"><span class="tag">✗ crashes in ~1 s</span>
+<pre>Command::new(exe)
+    .current_dir(dir)
+<span class="x">    .stdin(Stdio::null())</span>
+    .spawn()?;</pre></div>
+      <div class="snip yes"><span class="tag">✓ runs for hours</span>
+<pre><span class="k">let mut</span> cmd = Command::new(exe);
+cmd.current_dir(dir)
+<span class="ok">    .stdin(Stdio::piped())   // we hold the write end</span>
+    .stdout(Stdio::piped()); <span class="c">// party list reads it</span></pre>
+      <span class="src">src-tauri/src/native_games.rs · start_botwmp_server</span></div>
+    </div>
+  </div>
+
+  <div class="pair-wrap">
+    <h3>2 · Where the server listens</h3>
+    <div class="pair">
+      <div class="snip no"><span class="tag">✗ binds the LAN card</span>
+<pre>[Connection]
+<span class="x">IP=localhost</span>
+Port=5050
+
+[Gamemode]
+DefaultGamemode=False <span class="c">; asks a question at start</span></pre></div>
+      <div class="snip yes"><span class="tag">✓ loopback, unattended</span>
+<pre>[Connection]
+<span class="ok">IP=127.0.0.1</span>
+Port=5050
+
+[Gamemode]
+<span class="ok">DefaultGamemode=True</span> <span class="c">; uses [DefaultGamemode]</span></pre>
+      <span class="src">rewritten by configure_botwmp_server (keeps comments + CRLF, respects custom IPs)</span></div>
+    </div>
+  </div>
+
+  <div class="pair-wrap">
+    <h3>3 · “Is the server up yet?”</h3>
+    <div class="pair">
+      <div class="snip no"><span class="tag">✗ kills the server</span>
+<pre><span class="c">// connect, then drop without sending anything</span>
+<span class="x">TcpStream::connect(("127.0.0.1", 5050)).is_ok()</span>
+<span class="c">// server: catch → GetPlayer(-1) → throws → dead</span></pre></div>
+      <div class="snip yes"><span class="tag">✓ never touches it</span>
+<pre><span class="k">let</span> port_taken = || std::net::TcpListener
+    ::bind((<span class="s">"127.0.0.1"</span>, <span class="s">5050</span>)).is_err();
+<span class="k">loop</span> {
+    <span class="k">if let</span> Some(st) = child.try_wait()? { <span class="c">/* .NET 6 missing? */</span> }
+<span class="ok">    if port_taken() { return Ok(child); }</span>
+    sleep(<span class="s">500</span>ms).<span class="k">await</span>;
+}</pre>
+      <span class="src">src-tauri/src/native_games.rs (simplified)</span></div>
+    </div>
+  </div>
+
+  <div class="pair-wrap">
+    <h3>4 · Launching the BOTWM client</h3>
+    <p>The client starts Cemu with .NET <code>Process.Start</code>, which passes our std handles down. The injected DLL can't live with NUL handles.</p>
+    <div class="pair">
+      <div class="snip no"><span class="tag">✗ Cemu 0xc0000409 after Connect</span>
+<pre>Command::new(client_exe)
+    .current_dir(client_dir)
+<span class="x">    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())</span>
+    .spawn()?;</pre></div>
+      <div class="snip yes"><span class="tag">✓ launched like Explorer does</span>
+<pre><span class="k">let</span> code = <span class="k">unsafe</span> {
+<span class="ok">    ShellExecuteW(null_mut(), verb.as_ptr(),
+        wexe.as_ptr(), null(), wcwd.as_ptr(),
+        SW_SHOWNORMAL)</span>
+} <span class="k">as</span> isize;
+<span class="k">match</span> code { c <span class="k">if</span> c &gt; <span class="s">32</span> =&gt; Ok(()), <span class="c">/* … */</span> }</pre>
+      <span class="src">src-tauri/src/native_games.rs · shell_launch</span></div>
+    </div>
+  </div>
+
+  <div class="pair-wrap">
+    <h3>5 · The tunnel copy</h3>
+    <div class="pair">
+      <div class="snip no"><span class="tag">✗ bytes pass through in whatever pieces arrive</span>
+<pre><span class="x">tokio::io::copy(&amp;mut from_friend, &amp;mut to_server).await?;</span>
+<span class="c">// fine for every other game,
+// fatal for this server's parser</span></pre></div>
+      <div class="snip yes"><span class="tag">✓ whole messages only, for (5050, 7168)</span>
+<pre><span class="k">for</span> (port, framing) <span class="k">in</span> catalog::tcp_frames(game) {
+<span class="ok">    host.start_framed(port, framing);</span>
+}
+<span class="c">// every other port keeps the plain copy</span></pre>
+      <span class="src">src-tauri/src/games.rs → TunnelHost::start_framed</span></div>
+    </div>
+  </div>
+
+  <div class="pair-wrap">
+    <h3>6 · Graphic pack format on Cemu 1.26.2</h3>
+    <div class="pair">
+      <div class="snip no"><span class="tag">✗ silently skipped (no error!)</span>
+<pre>[Definition]
+titleIds = 00050000101C9400,...
+name = Multiplayer utilities
+<span class="x">version = 7</span></pre></div>
+      <div class="snip yes"><span class="tag">✓ every patch group applied</span>
+<pre>[Definition]
+titleIds = 00050000101C9400,...
+name = Multiplayer utilities
+<span class="ok">version = 6</span>
+<span class="c"># checked in Cemu's log.txt</span></pre></div>
+    </div>
+  </div>
+
+  <div class="pair-wrap">
+    <h3>7 · Finding Cemu.exe</h3>
+    <div class="pair">
+      <div class="snip no"><span class="tag">✗ never matches</span>
+<pre><span class="c">// find_files lowercases every file name first</span>
+<span class="x">find_exe(dir, spec.exe)            // "Cemu.exe"</span></pre></div>
+      <div class="snip yes"><span class="tag">✓</span>
+<pre><span class="ok">find_exe(dir, &amp;spec.exe.to_ascii_lowercase())</span></pre></div>
+    </div>
+  </div>
+
+  <div class="pair-wrap">
+    <h3>8 · Writing into Cemu's memory from a sidecar</h3>
+    <div class="pair">
+      <div class="snip no"><span class="tag">✗ ~12 ms per call</span>
+<pre><span class="x">WriteProcessMemory(h, addr, buf.as_ptr(), 12, null_mut());</span>
+<span class="c">// toggles page protection on a 3.3 GB region;
+// at 60 fps that alone eats most of a frame</span></pre></div>
+      <div class="snip yes"><span class="tag">✓ microseconds</span>
+<pre><span class="ok">NtWriteVirtualMemory(h, addr, buf.as_ptr(), 12, null_mut());</span>
+<span class="c">// reads were always &lt; 1 µs; now writes are too</span></pre>
+      <span class="src">botw_smooth_sidecar.rs / botw_downed_sidecar.rs (simplified)</span></div>
+    </div>
+  </div>
+
+  <div class="pair-wrap">
+    <h3>9 · Showing the other player's position</h3>
+    <div class="pair">
+      <div class="snip no"><span class="tag">✗ shows the network's hiccups</span>
+<pre><span class="c">// whatever arrived last, the moment it arrives</span>
+<span class="x">puppet.pos = latest_received;</span>
+<span class="c">// 14% frozen frames, then jumps</span></pre></div>
+      <div class="snip yes"><span class="tag">✓ jitter buffer (botw_smooth.rs)</span>
+<pre><span class="k">pub const</span> TARGET_DEPTH: f64 = <span class="s">2.5</span>;   <span class="c">// ~45 ms behind</span>
+<span class="k">pub const</span> RESET_GAP_MS: f64 = <span class="s">250.0</span>;
+<span class="k">pub const</span> TELEPORT_M: f32 = <span class="s">8.0</span>;
+<span class="c">// steer speed on a 300 ms average of buffer depth</span>
+<span class="k">let</span> rate = <span class="k">if</span> depth &lt;= <span class="s">0.02</span> { <span class="s">0.0</span> } <span class="c">// empty: pause, refill</span>
+  <span class="k">else</span> { (<span class="s">1.0</span> + RATE_GAIN * (depth_avg - TARGET_DEPTH))
+         .clamp(<span class="s">0.5</span>, <span class="s">1.5</span>) };
+self.cursor += dt / self.interval * rate;
+<span class="ok">Some(lerp(a, b, self.cursor.fract()))</span></pre></div>
+    </div>
+  </div>
+
+  <div class="pair-wrap">
+    <h3>10 · Our own PowerPC patch (downed instead of dead)</h3>
+    <p>Cemu graphic packs can add assembly to the game. This one routes both of Link's health stores through our clamp. Mode 0 (vanilla) is the default, so it does nothing unless PrivCord arms it.</p>
+    <div class="pair">
+      <div class="snip no"><span class="tag">✗ looks right, reads address 4</span>
+<pre><span class="c">; r0 as a base register means literal 0 on PowerPC</span>
+li   r0, DownBlock@l
+<span class="x">lwz  r9, 4(r0)      ; NOT DownBlock+4 → crash</span></pre></div>
+      <div class="snip yes"><span class="tag">✓ patch_PrivCordDowned.asm</span>
+<pre>DownClamp:
+lis  r12, DownBlock@ha
+addi r12, r12, DownBlock@l
+<span class="ok">lwz  r9, 4(r12)     ; DownMode</span>
+cmpwi r9, 1
+bne  DownClampOut   ; mode 0 or 2: vanilla
+lwz  r10, 8(r12)    ; DownState
+cmpwi r10, 0
+bne  DownHold       ; already downed: hold ¼ heart
+cmpwi r3, 0
+bgt  DownClampOut   ; survives the hit</pre></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CUT ============ -->
+<section id="cut">
+  <h2>What we <span class="u">removed, cut or reverted</span></h2>
+  <p class="sub">Things that were built or tried and then taken out of the game setup or the plan, and why.</p>
+  <div class="cut">
+    <div><s>keys.txt staging + dump search</s><span>The game boots without keys on these Cemu builds, so all key-file logic was deleted.</span></div>
+    <div><s>ZeroTier / PrivCord Network in the BotW flow</s><span>Built and live-tested, then removed from BotW: the tunnel needs no install and has no device cap.</span></div>
+    <div><s>Hamachi (from the mod's tutorial)</s><span>Replaced by the tunnel: friends type 127.0.0.1:5050.</span></div>
+    <div><s>Cemu 2.6 for multiplayer</s><span>The DLL needs Cemu 1.26.2. 2.6 stays installed but multiplayer runs on 1.26.2.</span></div>
+    <div><s>One garbled file in the Cemu 2.6 zip</s><span>Stripped so Windows tar can unpack it.</span></div>
+    <div><s>“Install update + DLC into mlc01”</s><span>Tutorial step dropped; later done with junctions so nothing is copied twice.</span></div>
+    <div><s>patch_ZZ_BOTWMTrace.asm</s><span>Our diagnostic patch hooked ~35 game addresses. Not shipped; remove from the main PC when convenient.</span></div>
+    <div><s>patch_ZZ_BOTWMFix.asm</s><span>Kept the newest puppet copy. Harmless, but STRIX worked without it, so it's not shipped.</span></div>
+    <div><s>AISchedule / CharacterController / bone-link edits</s><span>Applied to all 32 Jugador packs, tested live, no change, reverted from backups.</span></div>
+    <div><s>Single-core recompiler override</s><span>No difference, reverted.</span></div>
+    <div><s>Graphics pack v7 (newest community packs)</s><span>Cemu 1.26.2 can't read them. Pinned to the Github833 release (v6).</span></div>
+    <div><s>Bosses that break with ×2 health</s><span>Dark Beast Ganon, weak points, 1-HP actors, dragons, divine beast parts are left alone by co-op difficulty.</span></div>
+    <div><s>Item trading (this phase)</s><span>Designed (mailbox patch + sidecar), not built: the Wii U addresses for the inventory functions still need finding.</span></div>
+    <div><s>Rewriting the mod's DLL</s><span>10–15 weeks of high-risk work. Deferred; new features go on PrivCord's own side channel.</span></div>
+    <div><s>Arbitrary in-game text</s><span>Only possible by faking a player name. Not built.</span></div>
+    <div><s>“Hunter vs Speedrunner” logic</s><span>The mod has none in 1.0.4; the UI says so instead of pretending.</span></div>
+  </div>
+  <p class="sub">Kept on purpose: the original BOTWM team's credits. PrivCord's additions say “Made by Blackz”; the mod's own credits stay untouched.</p>
+</section>
+
+<!-- ============ HINDSIGHT ============ -->
+<section id="hindsight">
+  <h2>What we <span class="u">should have done differently</span></h2>
+  <p class="sub">The fix itself was small: one framing function in the tunnel. Getting to it took three sessions. These are the shortcuts we can see now.</p>
+  <div class="hind">
+    <div class="h">
+      <div class="cost">cost us ~2 sessions</div>
+      <h3>Capture the network traffic first</h3>
+      <p><b>Did:</b> started inside the game, hooking ~35 PowerPC addresses to trace why the puppet was deleted.</p>
+      <p><b>Should have:</b> put the logging proxy between client and server on day one. “0 replies with Updated = 1” points straight at the network.</p>
+    </div>
+    <div class="h">
+      <div class="cost">hid the bug</div>
+      <h3>Test the real path early</h3>
+      <p><b>Did:</b> the install and host tests all ran on one PC, over loopback, where messages never split.</p>
+      <p><b>Should have:</b> run one two-PC join through the tunnel before polishing the installer.</p>
+    </div>
+    <div class="h">
+      <div class="cost">cost a session</div>
+      <h3>Follow the mod's guide to the letter, then improve</h3>
+      <p><b>Did:</b> switched to Cemu 2.6 and decided the extra packs weren't needed.</p>
+      <p><b>Should have:</b> copied the guide's exact setup (Cemu 1.26.2, Extended Memory, FPS++), got it working, and only then changed things.</p>
+    </div>
+    <div class="h">
+      <div class="cost">fast to read, slow to find</div>
+      <h3>Read the server's code before the game's</h3>
+      <p><b>Did:</b> decompiled the .NET server early, but read it for features, not for its receive loop.</p>
+      <p><b>Should have:</b> treated “append the whole 10 KB buffer on every read” as a suspect the moment a second PC was involved.</p>
+    </div>
+    <div class="h">
+      <div class="cost">built, then removed</div>
+      <h3>Decide the network first</h3>
+      <p><b>Did:</b> built the full ZeroTier integration, then made BotW tunnel-only.</p>
+      <p><b>Should have:</b> settled “tunnel or virtual LAN?” before writing either.</p>
+    </div>
+    <div class="h">
+      <div class="cost">crashed the server</div>
+      <h3>Never poke a fragile server</h3>
+      <p><b>Did:</b> a quick “is it up?” connect, which crashed it.</p>
+      <p><b>Should have:</b> assumed closed, unmaintained software can't take surprises, and watched it from outside (port bound, log lines).</p>
+    </div>
+    <div class="h">
+      <div class="cost">open question</div>
+      <h3>One save on both PCs</h3>
+      <p><b>Did:</b> copied the same save to both Cemus to get past the “needs a save” step.</p>
+      <p><b>Should have:</b> given each player their own save from the start; how co-op progress should merge is still undecided.</p>
+    </div>
+    <div class="h">
+      <div class="cost">what went right</div>
+      <h3>Measure before fixing</h3>
+      <p>Every real fix came from a number: the write breakpoint, the 0-of-227,150 count, the 20/40/4 ms arrival gaps, the 12 ms write cost. Keep doing that.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ TOOLS ============ -->
+<section id="tools">
+  <h2>The <span class="u">toolbox</span></h2>
+  <div class="tools">
+    <div class="tool"><span class="role">emulator</span><b>Cemu 1.26.2 (+ 2.6)</b><span>Wii U emulator; 1.26.2 for multiplayer, with its PPC debugger and graphic-pack patching.</span></div>
+    <div class="tool"><span class="role">the mod</span><b>BOTWM 1.0.4</b><span>WPF client, .NET 6 dedicated server, InjectDLL.dll, BNPs. Taken down upstream; 1.0.4 is final.</span></div>
+    <div class="tool"><span class="role">mod merging</span><b>BCML</b><span>Its merged output ships as a file-overlay graphic pack (fsPriority 9999). The client reads BCML's settings to find Cemu.</span></div>
+    <div class="tool"><span class="role">our app</span><b>Tauri · Rust · React</b><span>PrivCord itself: installs, host/join, session cards, sidecars, overlay window.</span></div>
+    <div class="tool"><span class="role">networking</span><b>iroh P2P tunnel</b><span>PrivCord's tunnel; “Direct · 6 ms” between the two PCs.</span></div>
+    <div class="tool"><span class="role">distribution</span><b>Google Drive sync</b><span>All packages staged in the owner's own Drive folder and hash-pinned on install.</span></div>
+    <div class="tool"><span class="role">.NET decompiler</span><b>ilspycmd</b><span>Read the client and server source: handleClient, console commands, DTO layouts.</span></div>
+    <div class="tool"><span class="role">native RE</span><b>REA / Ghidra</b><span>Decompiled InjectDLL.dll: OnActorCreate, OnActorErase, PThread, memory scans.</span></div>
+    <div class="tool"><span class="role">disassembly</span><b>capstone + rpxdis.py</b><span>Disassembled U-King.rpx (PowerPC) ranges, callers, field references.</span></div>
+    <div class="tool"><span class="role">game formats</span><b>oead · rstb (Python)</b><span>Checked actor packs, ActorInfo, the resource size table, Jugador data.</span></div>
+    <div class="tool"><span class="role">debugging</span><b>watch-writer.ps1</b><span>Debugger attach + hardware write breakpoint. This tool found the root cause.</span></div>
+    <div class="tool"><span class="role">wire capture</span><b>proxy.py</b><span>Logging proxy between client and server; parsed 227,150 replies.</span></div>
+    <div class="tool"><span class="role">two-PC control</span><b>SSH + schtasks /it</b><span>Drove the STRIX laptop; scheduled tasks to show GUI apps on its desktop. SSH reverse tunnel for the revive test.</span></div>
+    <div class="tool"><span class="role">packaging</span><b>bsdtar · 7-Zip</b><span>Built the 31.9 GB uncompressed game tar; opened BNPs.</span></div>
+    <div class="tool"><span class="role">hardware detection</span><b>WMI / EDID</b><span>GPU and screen refresh rate → Max/High/Balanced preset and 60/120/144 fps.</span></div>
+    <div class="tool"><span class="role">community packs</span><b>Graphic packs Github833</b><span>Graphics, Enhancements, Draw Distance (v6), plus Extended Memory and FPS++.</span></div>
+  </div>
+</section>
+
+<!-- ============ COOP ============ -->
+<section id="coop">
+  <h2>Once it worked: <span class="u">co-op add-ons</span></h2>
+  <p class="sub">None of these modify the mod. They use the server's own config file and console, our own graphic packs generated from each player's own game files, and sidecars that read and write Cemu's memory.</p>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Feature</th><th>How it works</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Co-op enemy health ×1.5–3</td><td>Edits only the 4-byte <code>Life</code> int in 133 actor packs + ActorInfo, so file sizes and the RSTB stay valid. Bokoblin 13 → 26, Lynel 7500 → 15000. Built in 1.8 s.</td><td><span class="pill g">verified in game</span></td></tr>
+        <tr><td>Shared enemies (beta)</td><td>An enemy near two players gets one owner (the nearest); every other game shows a puppet copy with its AI paused by our patch, moved through a jitter buffer. Ownership hands over when someone is 20 m closer for 0.5 s. P2: puppets play the owner's animation, and deaths are mirrored.</td><td><span class="pill g">P1 + P2 verified live on both PCs</span></td></tr>
+        <tr><td>Downed / revive</td><td>PPC patch holds Link at ¼ heart; friend within 3 m holds <b>G</b> for 12 s; game over only when everyone is down.</td><td><span class="pill g">two-PC revive verified</span></td></tr>
+        <tr><td>Input freeze while downed</td><td>Hooks the single <code>VPADRead</code> call (0x030D9F48) and empties the controller; a lease returns controls if PrivCord stops.</td><td><span class="pill y">needs a Cemu restart to test</span></td></tr>
+        <tr><td>Auto max graphics + 120/144 fps</td><td>Main PC: RTX 5090, 1440p @ 240 Hz → Max, 4K internal, 120 fps. STRIX: panel reports 60 Hz → High, 60 fps.</td><td><span class="pill y">verified offline</span></td></tr>
+        <tr><td>Smooth remote player</td><td>Jitter buffer sidecar. Frozen frames 14% → 0%.</td><td><span class="pill g">verified live</span></td></tr>
+        <tr><td>Party list on the card</td><td>Name, player number, “(you)”, distance, hearts; polls <code>_Get n Position/Health</code> every 2 s.</td><td><span class="pill y">server verified, game test pending</span></td></tr>
+        <tr><td>Teleport: Go to / Bring</td><td>Console <code>Tp p1 p2</code>; arrives exactly once in the next update.</td><td><span class="pill y">server verified, game test pending</span></td></tr>
+        <tr><td>Game modes</td><td>Co-op, Hunter vs Speedrunner, Death Swap (sends <code>DeathSwap on</code> with the interval).</td><td><span class="pill y">server verified</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="demo revive" aria-label="Animation of the revive overlay: hold G for 12 seconds to bring a downed friend back to 3 hearts">
+    <h3>Downed &amp; revive, as the overlay shows it</h3>
+    <div class="rv-row">
+      <div class="rv-who">
+        <span class="rv-state down">Kev · <span class="hearts">◔</span> downed</span>
+        <span class="rv-state up">Kev · <span class="hearts">♥♥♥</span> revived by blackz</span>
+      </div>
+      <div class="rv-prompt"><kbd>G</kbd> Hold G to revive Kev <small>(within 3 m · 12 s)</small></div>
+      <div class="rv-bar"><span></span></div>
+    </div>
+    <p class="diagram-note">Sped up here. A lethal hit leaves ¼ heart instead of Game Over; a friend holds G for 12 s; the downed player comes back with 3 hearts. Everyone down → everyone gets Game Over.</p>
+  </div>
+</section>
+
+<!-- ============ NEXT ============ -->
+<section id="next">
+  <h2>What we can do better, and <span class="u">what's next</span></h2>
+  <p class="sub">Effort estimates come from the co-op research plan. The rule for everything new: it travels on PrivCord's own side channel (sidecar + our own patches), never on the mod's fixed wire format.</p>
+  <div class="road">
+    <div class="lane-col now">
+      <h3>Now <small>days</small></h3>
+      <div class="card"><b>Combined build on both PCs</b><span>Co-op, gameplay and shared-enemies work in one build. Install once, then one full two-player session inside the app.</span></div>
+      <div class="card"><b>Shared enemies P3: hits</b><span>Damage dealt to a puppet copy goes to the owner's real enemy.</span></div>
+      <div class="card"><b>Finish the unverified bits</b><span>Input freeze while downed, max graphics in game, smoothing seen from STRIX's side.</span></div>
+      <div class="card"><b>Smoothing inside the game</b><span>A per-frame PPC hook reads our smoothed position, removing the last spike every ~2 s.</span></div>
+      <div class="card"><b>Enemy damage multiplier</b><span>Second host setting, rides on the same DownClamp hook.</span></div>
+      <div class="card"><b>Auto-install .NET 6 runtime</b><span>The last manual step for friends.</span></div>
+      <div class="card"><b>Clean-up</b><span>Remove the diagnostic trace pack from the main PC; STRIX on Ethernet or Wi-Fi power saving off; check whether its screen can run above 60 Hz.</span></div>
+    </div>
+    <div class="lane-col next">
+      <h3>Next <small>1–5 weeks</small></h3>
+      <div class="card"><b>Proximity voice</b><span>PrivCord calls get quieter with in-game distance; positions are already in the party feed. 3–5 days, no game risk. Best value.</span></div>
+      <div class="card"><b>Host world controls</b><span>Time, weather, “everyone to me”, go to a shrine or tower. All stock console commands. 2–3 days.</span></div>
+      <div class="card"><b>Save snapshots</b><span>Before every session, one-click restore. The safety net for anything riskier. 2 days.</span></div>
+      <div class="card"><b>Session recap</b><span>Shrines, towers and koroks the party got, posted to the channel. 2–3 days.</span></div>
+      <div class="card"><b>Item trading</b><span>Mailbox patch calls the game's own add/remove item functions, with a ledger. 3–5 weeks; first the Wii U addresses must be found.</span></div>
+      <div class="card"><b>Own saves per player</b><span>Drop in/out with your own save; shared progress = synced flags. 1–2 weeks after deciding what “co-op progress” means.</span></div>
+    </div>
+    <div class="lane-col later">
+      <h3>Later <small>months</small></h3>
+      <div class="card"><b>Replace the closed DLL</b><span>An out-of-process sidecar + our own patch packs + a small Rust server. No injection, so no handle crash class, no framing workaround, newer Cemu possible. 10–15 weeks; the remote-player puppet is the hard part.</span></div>
+      <div class="card"><b>Spectate a friend</b><span>Camera on their puppet, e.g. while downed.</span></div>
+      <div class="card"><b>Emotes, shared horses, co-op puzzles</b><span>Need new animation and actor work.</span></div>
+      <div class="card"><b>Shared stash &amp; wallet</b><span>Falls out of the trade ledger.</span></div>
+    </div>
+  </div>
+  <div class="box">
+    <h3>When to start the DLL rewrite</h3>
+    <p>Not now. Switch only if one of these happens: a feature needs a new field on the mod's wire; the DLL stops working or can't be obtained; we want an installer with no third-party downloads; or a remaining puppet bug can only be fixed inside the DLL.</p>
+  </div>
+</section>
+
+<footer>
+  <p>Sources: PrivCord handoff docs (sessions 7–9, co-op, gameplay), the co-op research plan (<code>docs/botwmp-coop-research/PLAN.md</code>), the BOTWM setup tutorial, and PrivCord's source. Code excerpts: <a href="https://github.com/Blacknapoleon99/privcord-botw-coop">github.com/Blacknapoleon99/privcord-botw-coop</a>.</p>
+  <p>BOTW Multiplayer by its original team · PrivCord integration and co-op features made by Blackz.</p>
+</footer>
+
+</div>
+<div class="tray" aria-hidden="true"></div>
+</div>
+
+<script>
+(function () {
+  var modes = {
+    loop: {
+      reads: [{ w: 7168, t: "read 1 · 7,168 B", c: "good" }],
+      list: [{ w: 7168, t: "7,168 B message ✓", c: "good" }, { w: 3072, t: "unused tail", c: "" }],
+      verdict: "One read holds the whole message. The extra buffer bytes sit after it and are never parsed. This is why the mod worked for its authors, who tested on one machine or over a LAN.",
+      ok: true
+    },
+    before: {
+      reads: [{ w: 1400, t: "1,400", c: "" }, { w: 2800, t: "2,800", c: "" }, { w: 2968, t: "2,968", c: "" }],
+      list: [{ w: 3400, t: "1,400 real + 8,840 junk", c: "bad" }, { w: 3400, t: "2,800 real + 7,440 junk", c: "bad" }, { w: 3400, t: "2,968 real + …", c: "bad" }],
+      verdict: "Each partial read appends the whole 10 KB buffer. The bytes after the first piece are junk, every later message is misaligned, gets read as an unknown type and is dropped. Kev's updates never land, so his puppet gets position (0,0,0), falls out of the world and is erased.",
+      ok: false
+    },
+    after: {
+      reads: [{ w: 7168, t: "read 1 · 7,168 B (tunnel waited for all of it)", c: "good" }],
+      list: [{ w: 7168, t: "7,168 B message ✓", c: "good" }, { w: 3072, t: "unused tail", c: "" }],
+      verdict: "PrivCord's tunnel collects the pieces and hands the server exactly one whole 7,168-byte message per write (6,144 for a ping). The server sees what it would see on one PC. Updated = 1, real positions, and the puppets stay.",
+      ok: true
+    }
+  };
+  var reads = document.getElementById("reads");
+  var list = document.getElementById("list");
+  var verdict = document.getElementById("verdict");
+  var buttons = document.querySelectorAll(".toggle button");
+  function fill(el, parts) {
+    el.innerHTML = "";
+    parts.forEach(function (p) {
+      var d = document.createElement("div");
+      d.className = "chunk" + (p.c ? " " + p.c : "");
+      d.style.flex = String(p.w);
+      d.textContent = p.t;
+      d.title = p.t;
+      el.appendChild(d);
+    });
+  }
+  function show(mode) {
+    var m = modes[mode];
+    fill(reads, m.reads);
+    fill(list, m.list);
+    verdict.textContent = m.verdict;
+    verdict.className = "verdict" + (m.ok ? " ok" : "");
+    buttons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.mode === mode)); });
+  }
+  buttons.forEach(function (b) { b.addEventListener("click", function () { show(b.dataset.mode); }); });
+  show("before");
+
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce) {
+    document.querySelectorAll(".smil").forEach(function (g) { g.remove(); });
+  }
+
+  // ghost loop counter, in step with the CSS animation
+  var ghost = document.getElementById("ghost"), sp = 1, er = 0;
+  var spEl = document.getElementById("g-sp"), erEl = document.getElementById("g-er");
+  if (ghost && !reduce) {
+    ghost.addEventListener("animationiteration", function () {
+      er += 1; sp += 1;
+      spEl.textContent = sp; erEl.textContent = er;
+    });
+  }
+
+  // setup race: 13 manual steps vs 2 clicks
+  var oldSteps = Array.prototype.slice.call(document.querySelectorAll("#steps-old li"));
+  var newSteps = Array.prototype.slice.call(document.querySelectorAll("#steps-new li"));
+  var playing = document.getElementById("playing");
+  if (reduce) {
+    oldSteps.concat(newSteps).forEach(function (li) { li.classList.add("done"); });
+    playing.classList.add("on");
+  } else {
+    var tick = 0;
+    setInterval(function () {
+      tick = (tick + 1) % (oldSteps.length + 4);
+      oldSteps.forEach(function (li, i) { li.classList.toggle("done", i < tick); });
+      newSteps.forEach(function (li, i) { li.classList.toggle("done", tick > i); });
+      playing.classList.toggle("on", tick >= newSteps.length);
+    }, 900);
+  }
+})();
+</script>
+
+</body>
+</html>

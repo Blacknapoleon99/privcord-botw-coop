@@ -1,0 +1,6 @@
+[Definition]
+titleIds = 00050000101C9300,00050000101C9400,00050000101C9500
+name = PrivCord co-op downed / revive (Made by Blackz)
+path = "The Legend of Zelda: Breath of the Wild/Mods/PrivCord co-op downed"
+description = When Link would die he is downed at 1/4 heart instead, and a friend can revive him. Controlled by PrivCord. BOTW Multiplayer by its original team; PrivCord integration and co-op features by Blackz.
+version = 6

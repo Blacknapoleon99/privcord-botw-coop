@@ -1,0 +1,6 @@
+[Definition]
+titleIds = 00050000101C9300,00050000101C9400,00050000101C9500
+name = PrivCord shared enemies (Made by Blackz)
+path = "The Legend of Zelda: Breath of the Wild/Mods/PrivCord shared enemies"
+description = Lets PrivCord show an enemy that a friend's game is running as a copy of theirs (shared enemies, beta). Does nothing unless PrivCord turns it on. BOTW Multiplayer by its original team; PrivCord integration and co-op features by Blackz.
+version = 6
