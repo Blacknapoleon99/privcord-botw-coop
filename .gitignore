@@ -2,3 +2,6 @@ target/
 Cargo.lock
 *.log
 __pycache__/
+.vercel
+
+.vercel
